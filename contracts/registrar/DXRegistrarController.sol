@@ -110,14 +110,53 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   ///         송금으로 fallback.
   RevenueDistributor public revenueDistributor;
 
+  // ── MOL holder discount / MOL 홀더 할인 ────────────────────────────────────
+  //
+  // Holders of at least `molThreshold` MOL on the same chain receive a flat
+  // `molDiscountBps`-bps discount on rent and renewal. The discount is read
+  // from the caller's current MOL balance at registration time — no snapshot
+  // or escrow. This is intentionally simple: borrowing MOL briefly to claim
+  // the discount is possible but yields tiny absolute savings (at most a few
+  // dollars) and still surfaces the MOL ecosystem to the borrower, which is
+  // a desirable marketing side-effect.
+  //
+  // Disabled by default. Owner activates via `setMolDiscount` once MOL is
+  // deployed on Polygon and the threshold has been finalised.
+  //
+  // 동일 체인에서 `molThreshold` 이상의 MOL을 보유한 사용자는 등록·갱신 시
+  // `molDiscountBps` 만분율 할인을 받는다. 등록 시점의 잔액을 직접 조회 —
+  // 스냅샷·에스크로 없음. 단순한 설계: 빌려서 할인 받기는 가능하지만 절감액이
+  // 매우 작고 빌린 사람도 MOL 생태계에 노출되므로 마케팅 효과로 무방하다.
+  //
+  // 기본 비활성. MOL이 Polygon에 배포되고 임계치가 확정되면 owner가
+  // `setMolDiscount`로 활성화한다.
+
+  /// @notice MOL token contract on this chain. Zero address disables the
+  ///         discount entirely.
+  ///         이 체인의 MOL 토큰 컨트랙트. 0이면 할인 비활성.
+  IERC20 public molToken;
+
+  /// @notice Minimum MOL balance required to qualify for the discount.
+  ///         할인 적용 최소 MOL 보유량.
+  uint256 public molThreshold;
+
+  /// @notice Discount rate in basis points (1000 = 10%). Hard-capped at 5000
+  ///         (50%) in the setter so a mistaken update can never burn the
+  ///         entire rent.
+  ///         할인율 (만분율, 1000 = 10%). setter에서 5000(50%) 상한.
+  uint256 public molDiscountBps;
+  uint256 public constant MAX_MOL_DISCOUNT_BPS = 5000;
+
   /// @dev commitment hash => timestamp at which it was committed.
   ///      commitment 해시 => commit된 시각.
   mapping(bytes32 commitment => uint256 timestamp) public commitments;
 
   event ReservationsSet(address indexed reservations);
   event RevenueDistributorSet(address indexed distributor);
+  event MolDiscountSet(address indexed molToken, uint256 threshold, uint256 discountBps);
 
   error LabelReserved(string label);
+  error MolDiscountTooHigh(uint256 requested, uint256 max);
 
   constructor(
     DXRegistrar _registrar,
@@ -148,6 +187,61 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   function setRevenueDistributor(RevenueDistributor _distributor) external onlyOwner {
     revenueDistributor = _distributor;
     emit RevenueDistributorSet(address(_distributor));
+  }
+
+  /// @notice Configure the MOL holder discount. Owner-only.
+  ///
+  ///         Pass `_molToken = address(0)` to disable the discount entirely.
+  ///         Discount applies to native and ERC-20 priced rent/renewal alike.
+  ///
+  ///         MOL 홀더 할인 설정. 오너 전용.
+  ///         `_molToken = 0`이면 할인 비활성. 네이티브·토큰 결제 모두에 적용.
+  ///
+  /// @param _molToken     MOL ERC-20 address on this chain (or 0 to disable).
+  ///                      이 체인의 MOL ERC-20 주소 (또는 0).
+  /// @param _threshold    Minimum MOL units required for the discount.
+  ///                      For MOL with 18 decimals, 1,000,000 MOL is
+  ///                      `1_000_000 * 10**18`.
+  ///                      할인을 받기 위한 최소 MOL 단위. 18 decimals 기준
+  ///                      100만 MOL은 `1_000_000 * 10**18`.
+  /// @param _discountBps  Discount in basis points (1000 = 10%). Hard cap 5000.
+  ///                      할인율 만분율 (1000 = 10%). 상한 5000.
+  function setMolDiscount(
+    address _molToken,
+    uint256 _threshold,
+    uint256 _discountBps
+  ) external onlyOwner {
+    if (_discountBps > MAX_MOL_DISCOUNT_BPS) {
+      revert MolDiscountTooHigh(_discountBps, MAX_MOL_DISCOUNT_BPS);
+    }
+    molToken = IERC20(_molToken);
+    molThreshold = _threshold;
+    molDiscountBps = _discountBps;
+    emit MolDiscountSet(_molToken, _threshold, _discountBps);
+  }
+
+  /// @notice Compute the post-discount price for `user`. If MOL discount is
+  ///         disabled or the user does not meet the threshold, returns
+  ///         `price` unchanged.
+  ///         `user`에 대한 할인 후 가격을 계산. MOL 할인이 비활성이거나
+  ///         임계치 미달이면 원래 가격을 그대로 반환.
+  function _applyMolDiscount(uint256 price, address user)
+    internal view returns (uint256)
+  {
+    if (address(molToken) == address(0) || molDiscountBps == 0) return price;
+    if (molToken.balanceOf(user) < molThreshold) return price;
+    // Subtract discount. `discountBps <= 5000` is enforced in the setter,
+    // so `(price * discountBps) / 10000 <= price` always holds.
+    //   setter에서 5000 상한이 강제되므로 항상 `할인액 <= price`.
+    return price - (price * molDiscountBps / 10000);
+  }
+
+  /// @notice True if `user` currently qualifies for the MOL holder discount.
+  ///         Useful for UIs that want to surface "10% off" badges.
+  ///         `user`가 현재 MOL 할인 조건을 충족하는지. UI 배지 표시용.
+  function isMolEligible(address user) external view returns (bool) {
+    if (address(molToken) == address(0) || molDiscountBps == 0) return false;
+    return molToken.balanceOf(user) >= molThreshold;
   }
 
   /// @dev Revert if the label is reserved AND the caller is not its
@@ -191,9 +285,14 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   ///         registered or is still within an unexpired registration, this
   ///         is identical to `rentPrice(duration)`.
   ///
+  ///         Does NOT apply the MOL holder discount — use `rentPriceForPayer`
+  ///         for that. Wallets can call this for a baseline quote and
+  ///         `rentPriceForPayer` to show "your price with MOL discount".
+  ///
   ///         특정 라벨에 대한 총 가격(임대료 + post-grace premium)을 네이티브
-  ///         자산 wei로 반환. 라벨이 미등록 상태이거나 만료되지 않은 등록
-  ///         중이면 `rentPrice(duration)`과 동일.
+  ///         자산 wei로 반환. MOL 할인은 적용되지 않음 — 할인 적용된 가격은
+  ///         `rentPriceForPayer` 사용. 지갑은 기준 가격으로 이 함수를,
+  ///         "MOL 할인 적용 가격"으로 `rentPriceForPayer`를 호출할 수 있다.
   /// @param  label    Label to be registered. / 등록할 라벨.
   /// @param  duration Registration duration in seconds. / 등록 기간(초).
   function rentPriceFor(
@@ -201,6 +300,20 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     uint256 duration
   ) public view returns (uint256) {
     return _attoUSDToWei(_priceWithPremiumAttoUSD(label, duration));
+  }
+
+  /// @notice Same as `rentPriceFor`, but applies the MOL holder discount
+  ///         based on `payer`'s current MOL balance.
+  ///         `rentPriceFor`와 동일하되 `payer`의 MOL 잔액 기준 할인을 적용.
+  function rentPriceForPayer(
+    string calldata label,
+    uint256 duration,
+    address payer
+  ) public view returns (uint256) {
+    return _applyMolDiscount(
+      _attoUSDToWei(_priceWithPremiumAttoUSD(label, duration)),
+      payer
+    );
   }
 
   /// @notice Convert the attoUSD price for `duration` into the minimum
@@ -220,15 +333,31 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   }
 
   /// @notice Same as `rentPriceInToken`, but for a *specific* label so that
-  ///         any post-grace premium is included.
-  ///         `rentPriceInToken`과 동일하되, 특정 라벨에 대한 post-grace
-  ///         premium까지 포함한다.
+  ///         any post-grace premium is included. Does NOT apply MOL discount.
+  ///         `rentPriceInToken`과 동일하되 특정 라벨의 post-grace premium
+  ///         포함. MOL 할인은 적용되지 않음.
   function rentPriceInTokenFor(
     string calldata label,
     uint256 duration,
     address token
   ) public view returns (uint256) {
     return _attoUSDToTokenUnits(_priceWithPremiumAttoUSD(label, duration), token);
+  }
+
+  /// @notice Token-denominated price including the MOL holder discount based
+  ///         on `payer`'s MOL balance.
+  ///         `payer`의 MOL 잔액 기준 할인이 적용된 토큰 가격.
+  function rentPriceInTokenForPayer(
+    string calldata label,
+    uint256 duration,
+    address token,
+    address payer
+  ) public view returns (uint256) {
+    uint256 attoUSD = _applyMolDiscount(
+      _priceWithPremiumAttoUSD(label, duration),
+      payer
+    );
+    return _attoUSDToTokenUnits(attoUSD, token);
   }
 
   /// @dev Compute base rent + premium in attoUSD for a specific label.
@@ -317,9 +446,13 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     _checkReservation(label, msg.sender);
 
     bytes32 labelhash = keccak256(bytes(label));
-    // Use the label-specific price so any post-grace premium is included.
-    //   라벨별 가격을 사용하여 post-grace premium이 반영되도록 한다.
-    uint256 price_ = rentPriceFor(label, duration);
+    // Label-specific price including post-grace premium AND the MOL holder
+    // discount (if caller qualifies). Discount is based on `msg.sender`,
+    // not `owner`, because the payer is who actually holds the MOL.
+    //
+    // 라벨별 가격 (post-grace premium + MOL 할인 적용). 할인 기준은 결제자인
+    // `msg.sender`이며, `owner`가 아니다.
+    uint256 price_ = rentPriceForPayer(label, duration, msg.sender);
 
     if (msg.value < price_) revert InsufficientFund(price_, msg.value);
     if (!available(label)) revert NameNotAvailable(label);
@@ -342,7 +475,10 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     uint256 duration
   ) external payable override nonReentrant {
     bytes32 labelhash = keccak256(bytes(label));
-    uint256 price_ = rentPrice(duration);
+    // Renewal does not trigger premium decay (the name is still owned),
+    // but we still apply the MOL holder discount.
+    //   갱신은 premium decay 대상이 아니지만 MOL 할인은 적용.
+    uint256 price_ = _applyMolDiscount(rentPrice(duration), msg.sender);
 
     if (msg.value < price_) revert InsufficientFund(price_, msg.value);
 
@@ -378,10 +514,10 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     if (!available(label)) revert NameNotAvailable(label);
 
     bytes32 labelhash = keccak256(bytes(label));
-    // Use the label-specific token amount so any post-grace premium is
-    // pulled along with the base rent.
-    //   라벨별 토큰 금액을 사용하여 post-grace premium까지 함께 청구.
-    uint256 amount = rentPriceInTokenFor(label, duration, paymentToken);
+    // Use the label-specific token amount including post-grace premium AND
+    // the MOL holder discount based on caller's MOL balance.
+    //   라벨별 토큰 금액 (post-grace premium + MOL 할인 적용).
+    uint256 amount = rentPriceInTokenForPayer(label, duration, paymentToken, msg.sender);
 
     IERC20(paymentToken).safeTransferFrom(msg.sender, address(this), amount);
 
@@ -398,7 +534,12 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     address paymentToken
   ) external override nonReentrant {
     bytes32 labelhash = keccak256(bytes(label));
-    uint256 amount = rentPriceInToken(duration, paymentToken);
+    // Apply MOL discount to the attoUSD price before converting to token.
+    //   attoUSD 가격에 MOL 할인 적용 후 토큰 단위로 변환.
+    uint256 amount = _attoUSDToTokenUnits(
+      _applyMolDiscount(priceOracle.priceAttoUSD(duration), msg.sender),
+      paymentToken
+    );
     IERC20(paymentToken).safeTransferFrom(msg.sender, address(this), amount);
 
     uint256 expires = registrar.renew(uint256(labelhash), duration);

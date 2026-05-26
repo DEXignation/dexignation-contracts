@@ -224,6 +224,47 @@ Minimum label length: **3 UTF-8 characters**.
 
 최소 라벨 길이: **UTF-8 3자**.
 
+### MOL holder discount / MOL 홀더 할인
+
+Holders of **1,000,000 MOL** ([MolePin](https://molepin.com)) or more on
+Polygon receive a **flat 10% discount** on every registration and renewal.
+
+Polygon에서 **MOL 100만 개** ([MolePin](https://molepin.com)) 이상을
+보유한 사용자는 모든 등록·갱신에서 **10% 할인**을 받습니다.
+
+The discount is read directly from the caller's on-chain MOL balance at
+the moment of registration — no snapshot, no escrow, no extra
+transaction. Both native (POL) and ERC-20 (USDC/USDT) payment paths
+honour the discount.
+
+할인은 등록 시점에 호출자의 온체인 MOL 잔액을 직접 조회 — 스냅샷,
+에스크로, 별도 트랜잭션 없음. 네이티브(POL) 및 ERC-20(USDC/USDT)
+결제 모두 적용.
+
+Querying the discounted price from a wallet UI:
+
+지갑 UI에서 할인 적용 가격 조회:
+
+```typescript
+// Generic quote (no discount)
+const basePrice = await controller.rentPriceFor("alice", ONE_YEAR);
+
+// Personalised quote (with MOL discount if eligible)
+const yourPrice = await controller.rentPriceForPayer(
+  "alice", ONE_YEAR, walletAddress
+);
+
+// Boolean badge for "10% off" UI hint
+const eligible = await controller.isMolEligible(walletAddress);
+```
+
+Configuration is owner-only via `setMolDiscount(molToken, threshold, bps)`
+and is **disabled by default** until MOL is deployed on Polygon and the
+threshold is finalised.
+
+설정은 `setMolDiscount(molToken, threshold, bps)`로 owner 전용이며,
+MOL이 Polygon에 배포되고 임계치가 확정되기 전까지 **기본 비활성**.
+
 ---
 
 ## Project layout / 프로젝트 구조
