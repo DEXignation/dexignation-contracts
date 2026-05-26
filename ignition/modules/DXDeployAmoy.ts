@@ -72,14 +72,15 @@ export default buildModule("DXDeployAmoy", (m) => {
   });
   m.call(controller, "setReservations", [reservations], { id: "WireReservations" });
 
-  // NOTE: DXNToken, DXNStaking, RevenueDistributor are intentionally NOT
-  // deployed here. The token economy must be reviewed legally (Korea:
-  // 가상자산이용자보호법 / 자본시장법) and tokenomics frozen before any
-  // public network deployment.
+  // NOTE: Token-economy contracts (governance ERC-20, staking, revenue
+  // distributor) are intentionally NOT deployed by this module. The
+  // current architecture uses a Soulbound `DXContributionSBT` for
+  // contributor recognition instead; see `DXDeployLocal.ts` for the full
+  // testnet set including that contract.
   //
-  // 주의: DXNToken/Staking/RevenueDistributor는 의도적으로 미배포.
-  // 토큰 경제는 법무 검토(한국: 가상자산이용자보호법/자본시장법) 및
-  // tokenomics 확정 후 별도 모듈로 배포.
+  // 주의: 토큰 경제 컨트랙트(거버넌스 ERC-20, staking, revenue distributor)는
+  // 이 모듈에서 배포하지 않음. 현재 아키텍처는 기여자 인정용으로 Soulbound
+  // `DXContributionSBT`만 사용하며, 전체 셋업은 `DXDeployLocal.ts` 참고.
 
   return {
     registry,

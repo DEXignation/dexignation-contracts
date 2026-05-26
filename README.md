@@ -168,27 +168,12 @@ For full attribution and license texts, see
 |---|---|---|
 | `DXRegistry` | namehash tree of `(owner, resolver, expires)` records | namehash 트리의 owner/resolver/expires 원장 |
 | `DXRegistrar` | ERC-721 NFT minting, expiry, EIP-2981 royalty | `.dex` 2LD의 ERC-721 발행, 만료, EIP-2981 royalty |
-| `DXRegistrarController` | User-facing entry: commit-reveal, payment, atomic resolver setup | 사용자 진입점: commit-reveal, 결제, 리졸버 원자적 설정 |
+| `DXRegistrarController` | User-facing entry: commit-reveal, payment, holder discount, atomic resolver setup | 사용자 진입점: commit-reveal, 결제, 보유자 할인, 리졸버 원자적 설정 |
 | `DXResolver` | `(node, coinType) → addrBytes` and reverse names | coinType→addr 매핑 및 역방향 이름 |
 | `DXReverseRegistrar` | Claim `{addr}.addr.reverse` | 역방향 노드 클레임 |
 | `DXPriceOracle` | attoUSD → wei + premium decay | attoUSD → wei 변환 + 만료 후 premium 감쇠 |
 | `DXReservations` | Owner-managed reserved label registry | 오너 관리형 예약 라벨 레지스트리 |
-
-**Token economy (deploy separately, post legal review):**
-
-| Contract | Responsibility | 책임 |
-|---|---|---|
-| `DXNToken` | ERC20Votes governance token with hard cap | hard cap 있는 ERC20Votes 거버넌스 토큰 |
-| `DXNStaking` | Stake DXN, earn protocol revenue | DXN 스테이킹, 프로토콜 수익 수령 |
-| `RevenueDistributor` | Splits revenue treasury/staking/burn/buffer | 수익을 treasury/staking/burn/buffer로 분배 |
-
-> ⚠️  `DXNToken` and friends are **not deployed by the Polygon mainnet
-> Ignition module**. Tokenomics, vesting, and legal compliance (especially
-> 가상자산이용자보호법 / 자본시장법 in Korea) must be finalised first.
->
-> `DXNToken` 등은 **Polygon 메인넷 Ignition 모듈에 포함되지 않습니다.**
-> tokenomics·vesting·법무 검토(특히 한국의 가상자산이용자보호법/자본시장법)
-> 완료 후 별도 모듈로 배포.
+| `DXContributionSBT` | Soulbound contributor recognition NFT | 양도 불가 기여자 인정 NFT |
 
 **Utilities:**
 
@@ -196,7 +181,22 @@ For full attribution and license texts, see
 |---|---|---|
 | `DXNamehash` | EIP-137 namehash + EIP-181 helpers | namehash 및 역방향 헬퍼 |
 | `EVMCoinUtils` | ENSIP-11 coin-type encoding | coin-type 인코딩 |
-| `StringUtils` | UTF-8 aware `strlen` | UTF-8 인식 길이 계산 |
+| `StringUtils` | UTF-8-aware `strlen` + strict ASCII label validator | UTF-8 인식 길이 + strict ASCII 라벨 검증 |
+
+> **Design note.** This codebase intentionally has **no governance token,
+> no staking, and no revenue distributor**. Contributor recognition is
+> handled by the Soulbound `DXContributionSBT` (no transferability, no
+> price, no investment surface). The `DXRegistrarController.setDiscountToken`
+> hook lets the owner attach any ERC-20 (e.g. a partner project's token)
+> for a flat holder discount, but the discount is policy — not a revenue
+> share — so it does not change the legal character of the service.
+>
+> **설계 노트.** 이 코드베이스는 의도적으로 **거버넌스 토큰·스테이킹·
+> RevenueDistributor를 두지 않는다.** 기여자 인정은 Soulbound
+> `DXContributionSBT` (양도 불가·가격 없음·투자상품 표면 없음)가 담당.
+> `DXRegistrarController.setDiscountToken`은 owner가 임의의 ERC-20
+> (예: 파트너 토큰)을 보유자 할인 대상으로 지정하는 후크일 뿐, 수익 분배가
+> 아니므로 서비스의 법적 성격을 바꾸지 않음.
 
 For deeper architectural narrative, see
 [`docs/architecture.md`](./docs/architecture.md).
@@ -224,46 +224,108 @@ Minimum label length: **3 UTF-8 characters**.
 
 최소 라벨 길이: **UTF-8 3자**.
 
-### MOL holder discount / MOL 홀더 할인
+### Holder discount / 보유자 할인
 
-Holders of **1,000,000 MOL** ([MolePin](https://molepin.com)) or more on
-Polygon receive a **flat 10% discount** on every registration and renewal.
+`DXRegistrarController` includes a single-slot **holder discount** hook:
+the owner picks one ERC-20, a minimum balance, and a discount rate
+(capped at 50%). Any wallet that holds at least the threshold of that
+token at registration time gets the discount on every register and
+renewal — both native (POL) and ERC-20 (USDC/USDT) payment paths.
 
-Polygon에서 **MOL 100만 개** ([MolePin](https://molepin.com)) 이상을
-보유한 사용자는 모든 등록·갱신에서 **10% 할인**을 받습니다.
+`DXRegistrarController`에는 단일 슬롯 **보유자 할인** 후크가 있습니다.
+오너가 ERC-20 한 종류, 최소 보유량, 할인율(상한 50%)을 지정하면, 그
+토큰을 임계치 이상 보유한 지갑은 모든 등록·갱신에서 할인 적용 — 네이티브
+(POL) / ERC-20 (USDC/USDT) 결제 모두 동일.
 
-The discount is read directly from the caller's on-chain MOL balance at
-the moment of registration — no snapshot, no escrow, no extra
-transaction. Both native (POL) and ERC-20 (USDC/USDT) payment paths
-honour the discount.
+The balance is read directly from the caller's on-chain holdings at
+registration time — no snapshot, no escrow, no second transaction.
 
-할인은 등록 시점에 호출자의 온체인 MOL 잔액을 직접 조회 — 스냅샷,
-에스크로, 별도 트랜잭션 없음. 네이티브(POL) 및 ERC-20(USDC/USDT)
-결제 모두 적용.
-
-Querying the discounted price from a wallet UI:
-
-지갑 UI에서 할인 적용 가격 조회:
+할인 자격은 등록 시점의 온체인 잔액을 직접 조회 — 스냅샷·에스크로·
+추가 트랜잭션 없음.
 
 ```typescript
-// Generic quote (no discount)
-const basePrice = await controller.rentPriceFor("alice", ONE_YEAR);
-
-// Personalised quote (with MOL discount if eligible)
-const yourPrice = await controller.rentPriceForPayer(
-  "alice", ONE_YEAR, walletAddress
+// Owner: enable the discount (one-time setup or whenever the policy changes)
+await controller.setDiscountToken(
+  PARTNER_TOKEN_ADDRESS,    // any ERC-20 on the same chain
+  1_000_000n * 10n ** 18n,  // minimum holding (token's smallest unit)
+  1000n,                    // 10% discount (bps; max 5000 = 50%)
 );
 
-// Boolean badge for "10% off" UI hint
-const eligible = await controller.isMolEligible(walletAddress);
+// Owner: disable
+await controller.setDiscountToken(ZERO_ADDRESS, 0n, 0n);
+
+// Wallet UI: base quote vs personalised quote
+const basePrice = await controller.rentPriceFor("alice", ONE_YEAR);
+const yourPrice = await controller.rentPriceForPayer(
+  "alice", ONE_YEAR, walletAddress,
+);
+
+// Wallet UI: show "X% off" badge
+const eligible = await controller.isDiscountEligible(walletAddress);
 ```
 
-Configuration is owner-only via `setMolDiscount(molToken, threshold, bps)`
-and is **disabled by default** until MOL is deployed on Polygon and the
-threshold is finalised.
+The hook is **disabled by default** (`discountToken == address(0)`).
+The owner activates it after deciding which token to honour — for
+example, a partner project's token like [MolePin](https://molepin.com)
+(MOL) on Polygon, or a community token issued separately.
 
-설정은 `setMolDiscount(molToken, threshold, bps)`로 owner 전용이며,
-MOL이 Polygon에 배포되고 임계치가 확정되기 전까지 **기본 비활성**.
+후크는 **기본 비활성** (`discountToken == 0`). owner가 어떤 토큰을
+인정할지 결정한 뒤 활성화 — 예: Polygon의 파트너 토큰 MOL
+([MolePin](https://molepin.com)) 또는 별도로 발행한 커뮤니티 토큰.
+
+Setter constraints (enforced on-chain):
+| Constraint | Reason |
+|---|---|
+| `discountBps ≤ 5000` | Discount can never exceed 50% (prevents misconfig burning the entire rent). |
+| `requiredHoldAmount > 0` when enabling | A zero threshold would grant the discount to every wallet (since `balanceOf >= 0` always). |
+| Owner-only | Only the contract owner can change discount policy. |
+
+setter 제약 (온체인 강제):
+| 제약 | 사유 |
+|---|---|
+| `discountBps ≤ 5000` | 할인이 50%를 절대 넘지 않음 (오설정으로 임대료 전액 손실 방지). |
+| 활성화 시 `requiredHoldAmount > 0` | 0이면 모든 지갑이 자격 충족 (`balanceOf >= 0`이 항상 참). |
+| Owner 전용 | 컨트랙트 owner만 할인 정책 변경 가능. |
+
+### Contributor recognition (DXContributionSBT) / 기여자 인정
+
+Contributors to the DEXignation project — those who write code, design,
+write content, translate, moderate community, etc. — can receive a
+**Soulbound NFT** as on-chain recognition. The badge cannot be transferred
+or sold; it stays in the contributor's wallet as a permanent attestation
+of what they did.
+
+DEXignation 프로젝트에 기여한 사람(코드·디자인·콘텐츠·번역·커뮤니티 운영
+등)은 **양도 불가 NFT**를 온체인 인정 표시로 받을 수 있습니다. 배지는
+판매·이전 불가하며, 기여자의 지갑에 영구적으로 남아 "무엇을 했는가"의
+증명 역할.
+
+Why Soulbound? Because the badge is **recognition, not investment**.
+Removing transferability removes price discovery and prevents the badge
+from drifting into a speculative asset. The legal character of the
+service stays simple: it's an attestation, not a security and not a
+payment instrument.
+
+왜 Soulbound인가? 배지는 **인정이지 투자가 아니기 때문**. 양도 불가로 만들면
+가격 형성 자체가 차단되고 배지가 투기 자산으로 변질되지 않음. 서비스의 법적
+성격은 단순하게 유지 — 인증서일 뿐 증권·결제 수단이 아님.
+
+```typescript
+// Owner mints a badge
+await contributionSBT.award(
+  contributorAddress,
+  "code",                                  // short category
+  "Wrote initial Polygon deployment scripts",  // description
+);
+
+// Anyone can read
+const count = await contributionSBT.badgesOf(contributorAddress);
+const cat   = await contributionSBT.category(tokenId);
+const desc  = await contributionSBT.description(tokenId);
+
+// Any transfer attempt reverts
+await contributionSBT.transferFrom(from, to, tokenId);  // reverts: SoulboundNotTransferable
+```
 
 ---
 

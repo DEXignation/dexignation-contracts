@@ -65,22 +65,17 @@ export default buildModule("DXDeployPolygon", (m) => {
   });
   m.call(controller, "setReservations", [reservations], { id: "WireReservations" });
 
-  // IMPORTANT: DXNToken, DXNStaking, RevenueDistributor are intentionally
-  // NOT included in the production module. Deploy them only after:
-  //   1. Tokenomics finalised and documented.
-  //   2. Legal counsel review (Korea: 가상자산이용자보호법 / 자본시장법).
-  //   3. Vesting / distribution schedule fixed.
-  //   4. Mint authority transitioned to multisig or governance.
+  // Soulbound contributor recognition badge — owner-only mint, non-transferable.
+  // No tokenomics, no liquidity, no governance — purely an attestation NFT.
   //
-  // Once those are done, deploy them via a separate module and call
-  //   registrar.setRoyaltyInfo(distributor, 250)
-  //   controller.setRevenueDistributor(distributor)
-  //   distributor.setShares({...})
-  //   dxnStaking.setNotifier(distributor, true)
-  // to wire them in atomically.
-  //
-  // 중요: DXNToken/Staking/RevenueDistributor는 의도적으로 미포함. 배포
-  // 전제조건이 충족된 뒤 별도 모듈로 배포하고 위 4개 호출로 연결한다.
+  // Soulbound 기여자 배지 — owner-only mint, 양도 불가. tokenomics·유동성·
+  // 거버넌스 없음, 순수 인정 NFT.
+  const contributionSBT = m.contract("DXContributionSBT", []);
+
+  // setDiscountToken is left disabled by default. The owner activates it
+  // once a partner/community token (e.g. MOL on Polygon) is chosen.
+  //   할인 토큰은 기본 비활성. owner가 파트너/커뮤니티 토큰(예: Polygon MOL)을
+  //   정한 뒤 별도 호출로 활성화.
 
   return {
     registry,
@@ -90,5 +85,6 @@ export default buildModule("DXDeployPolygon", (m) => {
     reverseRegistrar,
     controller,
     reservations,
+    contributionSBT,
   };
 });

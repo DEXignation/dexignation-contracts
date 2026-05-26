@@ -52,7 +52,6 @@ import {IDXRegistrarController} from "./IDXRegistrarController.sol";
 import {IDXPriceOracle} from "../oracle/IDXPriceOracle.sol";
 import {DXRegistrar} from "./DXRegistrar.sol";
 import {DXReservations} from "./DXReservations.sol";
-import {RevenueDistributor} from "../revenue/RevenueDistributor.sol";
 import {IDXRegistry} from "../registry/IDXRegistry.sol";
 import {IDXResolver} from "../resolver/IDXResolver.sol";
 import "../utils/StringUtils.sol";
@@ -101,62 +100,64 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   ///         등록을 차단한다. zero address면 검사 비활성.
   DXReservations public reservations;
 
-  /// @notice Optional revenue distributor. When set, `withdraw()` and
-  ///         `withdrawToken()` route funds here instead of to the owner.
-  ///         Zero address falls back to owner-direct withdrawal.
-  ///
-  ///         선택적 수익 분배 컨트랙트. 설정되어 있으면 `withdraw()`와
-  ///         `withdrawToken()`이 owner 대신 이곳으로 송금. 0이면 owner 직접
-  ///         송금으로 fallback.
-  RevenueDistributor public revenueDistributor;
-
-  // ── MOL holder discount / MOL 홀더 할인 ────────────────────────────────────
+  // ── Holder discount / 보유자 할인 ──────────────────────────────────────────
   //
-  // Holders of at least `molThreshold` MOL on the same chain receive a flat
-  // `molDiscountBps`-bps discount on rent and renewal. The discount is read
-  // from the caller's current MOL balance at registration time — no snapshot
-  // or escrow. This is intentionally simple: borrowing MOL briefly to claim
-  // the discount is possible but yields tiny absolute savings (at most a few
-  // dollars) and still surfaces the MOL ecosystem to the borrower, which is
-  // a desirable marketing side-effect.
+  // Holders of at least `requiredHoldAmount` of `discountToken` receive a
+  // flat `discountBps`-bps discount on rent and renewal. The balance check
+  // runs against the caller's current on-chain balance at registration
+  // time — no snapshot, no escrow, no extra transaction.
   //
-  // Disabled by default. Owner activates via `setMolDiscount` once MOL is
-  // deployed on Polygon and the threshold has been finalised.
+  // The discount token can be any ERC-20. Typical uses:
+  //   - A partner project's token (e.g. MOL) as a marketing collaboration.
+  //   - A DEXignation contributor SBT-style ERC-20 issued by the project.
+  //   - A wrapped community asset.
   //
-  // 동일 체인에서 `molThreshold` 이상의 MOL을 보유한 사용자는 등록·갱신 시
-  // `molDiscountBps` 만분율 할인을 받는다. 등록 시점의 잔액을 직접 조회 —
-  // 스냅샷·에스크로 없음. 단순한 설계: 빌려서 할인 받기는 가능하지만 절감액이
-  // 매우 작고 빌린 사람도 MOL 생태계에 노출되므로 마케팅 효과로 무방하다.
+  // Because the discount logic doesn't care which token it points at, the
+  // owner can swap the discount target by calling `setDiscountToken`
+  // again. Passing `address(0)` disables the discount entirely.
   //
-  // 기본 비활성. MOL이 Polygon에 배포되고 임계치가 확정되면 owner가
-  // `setMolDiscount`로 활성화한다.
+  // 보유자 할인: `discountToken`을 `requiredHoldAmount` 이상 보유한 사용자
+  // 에게 등록·갱신 시 `discountBps` 만분율 할인. 등록 시점의 온체인 잔액을
+  // 직접 조회 — 스냅샷·에스크로·별도 트랜잭션 없음.
+  //
+  // `discountToken`은 임의의 ERC-20 가능 — 파트너 토큰(예: MOL), 자체 발급
+  // ERC-20, 래핑된 커뮤니티 자산 등. 단일 슬롯이므로 한 번에 한 토큰만
+  // 지정 가능하며, `setDiscountToken` 재호출로 교체. zero address면 비활성.
 
-  /// @notice MOL token contract on this chain. Zero address disables the
-  ///         discount entirely.
-  ///         이 체인의 MOL 토큰 컨트랙트. 0이면 할인 비활성.
-  IERC20 public molToken;
+  /// @notice ERC-20 token whose holders qualify for the discount. Zero
+  ///         address disables the discount entirely.
+  ///         할인 대상 ERC-20 토큰. 0 주소면 할인 비활성.
+  IERC20 public discountToken;
 
-  /// @notice Minimum MOL balance required to qualify for the discount.
-  ///         할인 적용 최소 MOL 보유량.
-  uint256 public molThreshold;
+  /// @notice Minimum balance of `discountToken` required to qualify.
+  ///         할인 자격을 얻기 위한 `discountToken` 최소 보유량.
+  uint256 public requiredHoldAmount;
 
-  /// @notice Discount rate in basis points (1000 = 10%). Hard-capped at 5000
-  ///         (50%) in the setter so a mistaken update can never burn the
-  ///         entire rent.
-  ///         할인율 (만분율, 1000 = 10%). setter에서 5000(50%) 상한.
-  uint256 public molDiscountBps;
-  uint256 public constant MAX_MOL_DISCOUNT_BPS = 5000;
+  /// @notice Discount rate in basis points (1000 = 10%). Hard-capped at
+  ///         `MAX_DISCOUNT_BPS` in the setter so a mistaken or compromised
+  ///         setter call can never burn the entire rent.
+  ///         할인율 (만분율, 1000 = 10%). setter에서 `MAX_DISCOUNT_BPS`
+  ///         상한을 강제하여 실수·탈취 시 임대료 전액 손실 방지.
+  uint256 public discountBps;
+
+  /// @notice Hard cap on the discount rate. 5000 bps = 50%.
+  ///         할인율 하드캡. 5000 bps = 50%.
+  uint256 public constant MAX_DISCOUNT_BPS = 5000;
 
   /// @dev commitment hash => timestamp at which it was committed.
   ///      commitment 해시 => commit된 시각.
   mapping(bytes32 commitment => uint256 timestamp) public commitments;
 
   event ReservationsSet(address indexed reservations);
-  event RevenueDistributorSet(address indexed distributor);
-  event MolDiscountSet(address indexed molToken, uint256 threshold, uint256 discountBps);
+  event DiscountConfigured(
+    address indexed discountToken,
+    uint256 requiredHoldAmount,
+    uint256 discountBps
+  );
 
   error LabelReserved(string label);
-  error MolDiscountTooHigh(uint256 requested, uint256 max);
+  error DiscountRateTooHigh(uint256 requested, uint256 max);
+  error RequiredHoldAmountIsZero();
 
   constructor(
     DXRegistrar _registrar,
@@ -181,67 +182,82 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     emit ReservationsSet(address(_reservations));
   }
 
-  /// @notice Attach (or detach) a revenue distributor. Owner-only.
-  ///         When set, `withdraw()`/`withdrawToken()` route funds here.
-  ///         수익 분배 컨트랙트 연결/해제. 오너 전용.
-  function setRevenueDistributor(RevenueDistributor _distributor) external onlyOwner {
-    revenueDistributor = _distributor;
-    emit RevenueDistributorSet(address(_distributor));
-  }
-
-  /// @notice Configure the MOL holder discount. Owner-only.
+  /// @notice Configure the holder-discount policy. Owner-only.
   ///
-  ///         Pass `_molToken = address(0)` to disable the discount entirely.
-  ///         Discount applies to native and ERC-20 priced rent/renewal alike.
+  ///         Pass `_discountToken = address(0)` to disable the discount
+  ///         entirely. Otherwise, holders of at least `_requiredHoldAmount`
+  ///         of `_discountToken` get `_discountBps` bps off rent and
+  ///         renewal on both native and ERC-20 payment paths.
   ///
-  ///         MOL 홀더 할인 설정. 오너 전용.
-  ///         `_molToken = 0`이면 할인 비활성. 네이티브·토큰 결제 모두에 적용.
+  ///         Constraints enforced by this setter:
+  ///           - `_discountBps` must be ≤ `MAX_DISCOUNT_BPS` (50%).
+  ///           - When the discount is enabled (`_discountToken != 0`),
+  ///             `_requiredHoldAmount` must be > 0. A zero threshold would
+  ///             grant the discount to every wallet (since any address has
+  ///             `balanceOf >= 0`), which is almost certainly a misconfig.
   ///
-  /// @param _molToken     MOL ERC-20 address on this chain (or 0 to disable).
-  ///                      이 체인의 MOL ERC-20 주소 (또는 0).
-  /// @param _threshold    Minimum MOL units required for the discount.
-  ///                      For MOL with 18 decimals, 1,000,000 MOL is
-  ///                      `1_000_000 * 10**18`.
-  ///                      할인을 받기 위한 최소 MOL 단위. 18 decimals 기준
-  ///                      100만 MOL은 `1_000_000 * 10**18`.
-  /// @param _discountBps  Discount in basis points (1000 = 10%). Hard cap 5000.
-  ///                      할인율 만분율 (1000 = 10%). 상한 5000.
-  function setMolDiscount(
-    address _molToken,
-    uint256 _threshold,
+  ///         보유자 할인 정책 설정. 오너 전용.
+  ///
+  ///         `_discountToken = 0`이면 할인 비활성. 그렇지 않으면 해당
+  ///         ERC-20을 `_requiredHoldAmount` 이상 보유한 사용자에게
+  ///         `_discountBps` 만분율 할인 (네이티브·토큰 결제 모두 적용).
+  ///
+  ///         setter에서 강제하는 제약:
+  ///           - `_discountBps` ≤ `MAX_DISCOUNT_BPS` (50%).
+  ///           - 활성화 시(`_discountToken != 0`) `_requiredHoldAmount` > 0.
+  ///             0으로 설정하면 모든 지갑에 할인이 적용되어 사실상 오설정.
+  ///
+  /// @param _discountToken       ERC-20 token address (0 to disable).
+  ///                             ERC-20 토큰 주소 (0이면 비활성).
+  /// @param _requiredHoldAmount  Minimum holding (in token's smallest unit,
+  ///                             e.g. wei for 18-decimal tokens). Must be > 0
+  ///                             when `_discountToken != 0`.
+  ///                             최소 보유량(토큰 최소 단위).
+  /// @param _discountBps         Discount in basis points (1000 = 10%).
+  ///                             할인율 만분율.
+  function setDiscountToken(
+    address _discountToken,
+    uint256 _requiredHoldAmount,
     uint256 _discountBps
   ) external onlyOwner {
-    if (_discountBps > MAX_MOL_DISCOUNT_BPS) {
-      revert MolDiscountTooHigh(_discountBps, MAX_MOL_DISCOUNT_BPS);
+    if (_discountBps > MAX_DISCOUNT_BPS) {
+      revert DiscountRateTooHigh(_discountBps, MAX_DISCOUNT_BPS);
     }
-    molToken = IERC20(_molToken);
-    molThreshold = _threshold;
-    molDiscountBps = _discountBps;
-    emit MolDiscountSet(_molToken, _threshold, _discountBps);
+    // When enabling, demand a non-zero threshold. When disabling
+    // (_discountToken == 0), the other two args are ignored anyway.
+    //   활성화 시 threshold > 0 강제. 비활성화(_discountToken == 0)면
+    //   나머지 인자는 무시됨.
+    if (_discountToken != address(0) && _requiredHoldAmount == 0) {
+      revert RequiredHoldAmountIsZero();
+    }
+    discountToken = IERC20(_discountToken);
+    requiredHoldAmount = _requiredHoldAmount;
+    discountBps = _discountBps;
+    emit DiscountConfigured(_discountToken, _requiredHoldAmount, _discountBps);
   }
 
-  /// @notice Compute the post-discount price for `user`. If MOL discount is
-  ///         disabled or the user does not meet the threshold, returns
+  /// @notice Compute the post-discount price for `user`. If the discount
+  ///         is disabled or the user does not meet the threshold, returns
   ///         `price` unchanged.
-  ///         `user`에 대한 할인 후 가격을 계산. MOL 할인이 비활성이거나
-  ///         임계치 미달이면 원래 가격을 그대로 반환.
-  function _applyMolDiscount(uint256 price, address user)
+  ///         `user`에 대한 할인 후 가격. 할인 비활성이거나 임계치 미달이면
+  ///         원래 가격 그대로 반환.
+  function _applyDiscount(uint256 price, address user)
     internal view returns (uint256)
   {
-    if (address(molToken) == address(0) || molDiscountBps == 0) return price;
-    if (molToken.balanceOf(user) < molThreshold) return price;
-    // Subtract discount. `discountBps <= 5000` is enforced in the setter,
+    if (address(discountToken) == address(0) || discountBps == 0) return price;
+    if (discountToken.balanceOf(user) < requiredHoldAmount) return price;
+    // `discountBps <= MAX_DISCOUNT_BPS` (50%) is enforced in the setter,
     // so `(price * discountBps) / 10000 <= price` always holds.
-    //   setter에서 5000 상한이 강제되므로 항상 `할인액 <= price`.
-    return price - (price * molDiscountBps / 10000);
+    //   setter에서 상한 강제되므로 항상 `할인액 <= price`.
+    return price - (price * discountBps / 10000);
   }
 
-  /// @notice True if `user` currently qualifies for the MOL holder discount.
-  ///         Useful for UIs that want to surface "10% off" badges.
-  ///         `user`가 현재 MOL 할인 조건을 충족하는지. UI 배지 표시용.
-  function isMolEligible(address user) external view returns (bool) {
-    if (address(molToken) == address(0) || molDiscountBps == 0) return false;
-    return molToken.balanceOf(user) >= molThreshold;
+  /// @notice True if `user` currently qualifies for the holder discount.
+  ///         Useful for UIs that want to render "X% off" badges.
+  ///         `user`가 현재 할인 조건을 충족하는지. UI 배지 표시용.
+  function isDiscountEligible(address user) external view returns (bool) {
+    if (address(discountToken) == address(0) || discountBps == 0) return false;
+    return discountToken.balanceOf(user) >= requiredHoldAmount;
   }
 
   /// @dev Revert if the label is reserved AND the caller is not its
@@ -291,14 +307,14 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   ///         registered or is still within an unexpired registration, this
   ///         is identical to `rentPrice(duration)`.
   ///
-  ///         Does NOT apply the MOL holder discount — use `rentPriceForPayer`
+  ///         Does NOT apply the holder discount — use `rentPriceForPayer`
   ///         for that. Wallets can call this for a baseline quote and
-  ///         `rentPriceForPayer` to show "your price with MOL discount".
+  ///         `rentPriceForPayer` to show "your discounted price".
   ///
   ///         특정 라벨에 대한 총 가격(임대료 + post-grace premium)을 네이티브
   ///         자산 wei로 반환. MOL 할인은 적용되지 않음 — 할인 적용된 가격은
   ///         `rentPriceForPayer` 사용. 지갑은 기준 가격으로 이 함수를,
-  ///         "MOL 할인 적용 가격"으로 `rentPriceForPayer`를 호출할 수 있다.
+  ///         "할인 적용 가격"으로 `rentPriceForPayer`를 호출할 수 있다.
   /// @param  label    Label to be registered. / 등록할 라벨.
   /// @param  duration Registration duration in seconds. / 등록 기간(초).
   function rentPriceFor(
@@ -316,7 +332,7 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     uint256 duration,
     address payer
   ) public view returns (uint256) {
-    return _applyMolDiscount(
+    return _applyDiscount(
       _attoUSDToWei(_priceWithPremiumAttoUSD(label, duration)),
       payer
     );
@@ -359,7 +375,7 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     address token,
     address payer
   ) public view returns (uint256) {
-    uint256 attoUSD = _applyMolDiscount(
+    uint256 attoUSD = _applyDiscount(
       _priceWithPremiumAttoUSD(label, duration),
       payer
     );
@@ -486,7 +502,7 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     // Renewal does not trigger premium decay (the name is still owned),
     // but we still apply the MOL holder discount.
     //   갱신은 premium decay 대상이 아니지만 MOL 할인은 적용.
-    uint256 price_ = _applyMolDiscount(rentPrice(duration), msg.sender);
+    uint256 price_ = _applyDiscount(rentPrice(duration), msg.sender);
 
     if (msg.value < price_) revert InsufficientFund(price_, msg.value);
 
@@ -545,7 +561,7 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     // Apply MOL discount to the attoUSD price before converting to token.
     //   attoUSD 가격에 MOL 할인 적용 후 토큰 단위로 변환.
     uint256 amount = _attoUSDToTokenUnits(
-      _applyMolDiscount(priceOracle.priceAttoUSD(duration), msg.sender),
+      _applyDiscount(priceOracle.priceAttoUSD(duration), msg.sender),
       paymentToken
     );
     IERC20(paymentToken).safeTransferFrom(msg.sender, address(this), amount);
@@ -666,38 +682,27 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     maxCommitmentAge = maxAge;
   }
 
-  /// @notice Withdraw native balance. Routes to `revenueDistributor` if
-  ///         configured, otherwise to the contract owner (fallback for
-  ///         single-operator deployments).
-  ///         네이티브 잔액 송금. `revenueDistributor`가 설정되어 있으면
-  ///         그곳으로, 아니면 owner로 송금(단일 운영자 배포용 fallback).
+  /// @notice Withdraw the entire native balance to the contract owner.
+  ///         네이티브 잔액 전액을 owner로 송금.
   function withdraw() public override onlyOwner nonReentrant {
-    address dest = address(revenueDistributor) == address(0)
-      ? owner()
-      : address(revenueDistributor);
-    _sendNative(dest, address(this).balance);
+    _sendNative(owner(), address(this).balance);
   }
 
-  /// @notice Withdraw the full balance of `token`. Routes to
-  ///         `revenueDistributor` if configured, otherwise to the owner.
-  ///         특정 토큰 잔액 송금. 라우팅 규칙은 `withdraw()`와 동일.
+  /// @notice Withdraw the entire balance of `token` to the contract owner.
+  ///         특정 토큰 잔액 전액을 owner로 송금.
   function withdrawToken(address token) public override onlyOwner nonReentrant {
     IERC20 t = IERC20(token);
-    address dest = address(revenueDistributor) == address(0)
-      ? owner()
-      : address(revenueDistributor);
-    t.safeTransfer(dest, t.balanceOf(address(this)));
+    t.safeTransfer(owner(), t.balanceOf(address(this)));
   }
 
-  /// @notice Recover tokens accidentally sent to this contract.
-  ///         Distinct from `withdrawToken`: this is for tokens that are
-  ///         NOT part of the protocol's revenue (e.g. an accidentally
-  ///         transferred random ERC-20), where the owner needs to send
-  ///         them to a specific recipient rather than the distributor.
+  /// @notice Recover an arbitrary amount of `token` to a chosen recipient.
+  ///         Distinct from `withdrawToken`: this is for tokens that were
+  ///         sent here by mistake (e.g. someone transferred a random
+  ///         ERC-20 to this address) and need to go back to a specific
+  ///         destination rather than the protocol owner.
   ///
-  ///         잘못 보내진 토큰 회수. `withdrawToken`과 구분되며, 프로토콜
-  ///         수익이 아닌 임의의 토큰을 owner가 특정 수신자에게 직접 보낼 때
-  ///         사용한다.
+  ///         임의 토큰을 지정 수신자로 회수. `withdrawToken`과 구분:
+  ///         실수로 송금된 토큰을 본래 주인에게 돌려줄 때 사용.
   function recoverFunds(
     address token,
     address to,

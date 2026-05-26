@@ -101,18 +101,18 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     baseNodeName = _baseNodeName;
 
     // Default royalty recipient is the contract owner. Owner should call
-    // `setRoyaltyInfo` to point at the RevenueDistributor / treasury after
-    // those contracts are deployed.
+    // `setRoyaltyInfo` to point at the treasury (or a Safe multisig)
+    // once that destination is finalised.
     //
-    // 기본 royalty 수령자는 컨트랙트 owner. RevenueDistributor / treasury
-    // 배포 후 owner가 `setRoyaltyInfo`로 그 주소를 지정해야 한다.
+    // 기본 royalty 수령자는 컨트랙트 owner. treasury 또는 Safe multisig 주소가
+    // 확정되면 owner가 `setRoyaltyInfo`로 지정.
     _setDefaultRoyalty(msg.sender, INITIAL_ROYALTY_BPS);
   }
 
   /// @notice Update the default royalty recipient and rate. Owner-only.
   ///         기본 royalty 수령자와 비율 변경. 오너 전용.
   /// @param receiver       Address to receive royalty payments (typically the
-  ///                       RevenueDistributor). / royalty 수령 주소.
+  ///                       treasury or a Safe multisig). / royalty 수령 주소.
   /// @param feeNumerator   Royalty in basis points (out of 10000). Capped
   ///                       at `MAX_ROYALTY_BPS` (10%). / 만분율.
   function setRoyaltyInfo(address receiver, uint96 feeNumerator)

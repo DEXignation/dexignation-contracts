@@ -2,19 +2,12 @@
 //
 // Ignition module — local deployment with Mock dependencies.
 // Useful for hardhat node + integration testing of the full payment flow.
-// Also deploys the optional auction/token-economy contracts so the full
-// system can be exercised end-to-end before mainnet.
 //
-// 로컬 배포 모듈. Mock 의존성을 함께 배포하여 결제 플로우 전체 + 선택적
-// 경매/토큰경제 컨트랙트까지 시험할 수 있다.
+// 로컬 배포 모듈. Mock 의존성을 함께 배포하여 결제 플로우 전체를 시험할 수 있다.
 
 import { buildModule } from "@nomicfoundation/hardhat-ignition/modules";
 import { keccak256, toBytes, zeroHash, encodePacked } from "viem";
 
-/**
- * Compute the namehash for a simple TLD label (no dots).
- * 단순 TLD 라벨(점 없음)의 namehash 계산.
- */
 function tldNamehash(label: string): `0x${string}` {
   const labelHash = keccak256(toBytes(label));
   return keccak256(encodePacked(["bytes32", "bytes32"], [zeroHash, labelHash]));
@@ -24,8 +17,6 @@ const TLD = "dex";
 const TLD_NODE = tldNamehash(TLD);
 const TLD_LABEL_HASH = keccak256(toBytes(TLD));
 
-// attoUSD prices: $8 / $18 / $25 / $40 for 1y / 3y / 5y / 10y.
-// attoUSD 가격: 1년 $8, 3년 $18, 5년 $25, 10년 $40.
 const RENT_PRICES = [
   8n * 10n ** 18n,
   18n * 10n ** 18n,
@@ -33,30 +24,13 @@ const RENT_PRICES = [
   40n * 10n ** 18n,
 ];
 
-// Mock POL/USD price: $0.40 with 8 decimals = 40_000_000.
-// Mock POL/USD 가격: $0.40, 8 decimals.
-const MOCK_POL_USD = 40_000_000n;
-
-// DXN governance token cap: 100M tokens.
-// DXN 거버넌스 토큰 cap: 1억 개.
-const DXN_CAP = 100_000_000n * 10n ** 18n;
-
-// Burn address used by the revenue distributor.
-const BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD" as const;
+const MOCK_POL_USD = 40_000_000n; // $0.40 with 8 decimals.
 
 export default buildModule("DXDeployLocal", (m) => {
-  const deployer = m.getAccount(0);
-
   // ── Mocks ─────────────────────────────────────────────────────────────────
-  const mockUsdc = m.contract("MockERC20", ["Mock USDC", "USDC", 6], {
-    id: "MockUSDC",
-  });
-  const mockUsdt = m.contract("MockERC20", ["Mock USDT", "USDT", 6], {
-    id: "MockUSDT",
-  });
-  const mockPolUsd = m.contract("MockPriceOracle", [8, MOCK_POL_USD], {
-    id: "MockPolUsd",
-  });
+  const mockUsdc = m.contract("MockERC20", ["Mock USDC", "USDC", 6], { id: "MockUSDC" });
+  const mockUsdt = m.contract("MockERC20", ["Mock USDT", "USDT", 6], { id: "MockUSDT" });
+  const mockPolUsd = m.contract("MockPriceOracle", [8, MOCK_POL_USD], { id: "MockPolUsd" });
 
   // ── Core protocol ─────────────────────────────────────────────────────────
   const registry = m.contract("DXRegistry", []);
@@ -64,85 +38,30 @@ export default buildModule("DXDeployLocal", (m) => {
   const resolver = m.contract("DXResolver", [registry]);
   const priceOracle = m.contract("DXPriceOracle", [RENT_PRICES]);
   const reverseRegistrar = m.contract("DXReverseRegistrar", [registry, resolver]);
-  const controller = m.contract("DXRegistrarController", [
-    registrar,
-    registry,
-    priceOracle,
-  ]);
+  const controller = m.contract("DXRegistrarController", [registrar, registry, priceOracle]);
 
-  // ── Auction infrastructure (optional, but useful for local testing) ───────
+  // ── Optional add-ons ──────────────────────────────────────────────────────
+  // Reservation registry — owner-managed reserved label list.
+  //   예약 레지스트리 — 오너 관리 예약 라벨.
   const reservations = m.contract("DXReservations", []);
 
-  // ── Token + revenue (LOCAL ONLY — never on mainnet without legal review) ──
-  // 토큰 + 수익 분배 (로컬 전용 — 법무 검토 없이 메인넷 절대 금지).
-  const dxnToken = m.contract("DXNToken", ["DEXignation", "DXN", DXN_CAP]);
-  const dxnStaking = m.contract("DXNStaking", [dxnToken]);
-
-  // RevenueDistributor: 70% treasury / 20% staking / 5% burn / 5% buffer.
-  // - staking      : DXNStaking address (ERC-20 rewards transferred + notified atomically)
-  // - nativeStakingProxy: deployer (native staking share routed here; staking
-  //                   contract only handles ERC-20, so native goes to a
-  //                   native-aware destination — treasury or a WPOL helper)
-  const distributor = m.contract("RevenueDistributor", [
-    {
-      treasury: deployer,
-      staking: dxnStaking,
-      nativeStakingProxy: deployer,
-      burnAddress: BURN_ADDRESS,
-      buffer: deployer,
-      treasuryBps: 7000,
-      stakingBps: 2000,
-      burnBps: 500,
-      bufferBps: 500,
-    },
-  ]);
+  // Soulbound contributor badge — issued by owner to project contributors.
+  //   Soulbound 기여자 배지 — owner가 프로젝트 기여자에게 발급.
+  const contributionSBT = m.contract("DXContributionSBT", []);
 
   // ── Wiring ────────────────────────────────────────────────────────────────
-  // 1. Hand `.dex` ownership to the registrar.
   m.call(registry, "setSubnodeOwner", [zeroHash, TLD_LABEL_HASH, registrar], {
     id: "GrantTldToRegistrar",
   });
-
-  // 2. Whitelist the controller on the registrar.
-  m.call(registrar, "addController", [controller], {
-    id: "AddController",
-  });
-
-  // 3. Configure the price oracle's POL/USD feed (Direct path).
-  m.call(priceOracle, "setPolUsdOracle", [mockPolUsd], {
-    id: "SetPolUsdOracle",
-  });
-
-  // 4. Allow USDC + USDT as payment tokens.
-  m.call(controller, "setAllowedPaymentToken", [mockUsdc, true], {
-    id: "AllowUSDC",
-  });
-  m.call(controller, "setAllowedPaymentToken", [mockUsdt, true], {
-    id: "AllowUSDT",
-  });
-
-  // 5. Auction / token-economy wiring.
+  m.call(registrar, "addController", [controller], { id: "AddController" });
+  m.call(priceOracle, "setPolUsdOracle", [mockPolUsd], { id: "SetPolUsdOracle" });
+  m.call(controller, "setAllowedPaymentToken", [mockUsdc, true], { id: "AllowUSDC" });
+  m.call(controller, "setAllowedPaymentToken", [mockUsdt, true], { id: "AllowUSDT" });
   m.call(controller, "setReservations", [reservations], { id: "WireReservations" });
-  m.call(controller, "setRevenueDistributor", [distributor], {
-    id: "WireDistributor",
-  });
-  m.call(registrar, "setRoyaltyInfo", [distributor, 250], {
-    id: "SetRegistrarRoyalty",
-  });
 
-  // 6. Staking setup: register reward assets BEFORE distributor can notify.
-  //    addRewardAsset is append-only; must be done before any notifyReward.
-  //    addRewardAsset은 append-only로 notifyReward 전에 호출 필수.
-  m.call(dxnStaking, "addRewardAsset", [mockUsdc], { id: "RegisterUSDCReward" });
-  m.call(dxnStaking, "addRewardAsset", [mockUsdt], { id: "RegisterUSDTReward" });
-  m.call(dxnStaking, "setNotifier", [distributor, true], {
-    id: "AuthoriseStakingNotifier",
-  });
-
-  // 7. Distributor → staking auto-notify on token distribution.
-  m.call(distributor, "setStakingNotifier", [dxnStaking], {
-    id: "WireStakingNotifier",
-  });
+  // setDiscountToken is intentionally NOT called here. The owner activates
+  // it after deciding which token to honour (MOL on Polygon, or none).
+  //   할인 토큰 활성화는 owner가 토큰을 정한 뒤 별도 호출.
 
   return {
     registry,
@@ -152,9 +71,7 @@ export default buildModule("DXDeployLocal", (m) => {
     reverseRegistrar,
     controller,
     reservations,
-    dxnToken,
-    dxnStaking,
-    distributor,
+    contributionSBT,
     mockUsdc,
     mockUsdt,
     mockPolUsd,
