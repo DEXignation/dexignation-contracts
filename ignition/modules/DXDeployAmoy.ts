@@ -51,6 +51,12 @@ export default buildModule("DXDeployAmoy", (m) => {
     priceOracle,
   ]);
 
+  // Reservation registry — useful on Amoy for testing trademark / premium
+  // flows before mainnet.
+  //
+  // 예약 레지스트리 — Amoy에서 상표/프리미엄 플로우 테스트용.
+  const reservations = m.contract("DXReservations", []);
+
   m.call(registry, "setSubnodeOwner", [zeroHash, TLD_LABEL_HASH, registrar], {
     id: "GrantTldToRegistrar",
   });
@@ -64,6 +70,16 @@ export default buildModule("DXDeployAmoy", (m) => {
   m.call(controller, "setAllowedPaymentToken", [mockUsdt, true], {
     id: "AllowUSDT",
   });
+  m.call(controller, "setReservations", [reservations], { id: "WireReservations" });
+
+  // NOTE: DXNToken, DXNStaking, RevenueDistributor are intentionally NOT
+  // deployed here. The token economy must be reviewed legally (Korea:
+  // 가상자산이용자보호법 / 자본시장법) and tokenomics frozen before any
+  // public network deployment.
+  //
+  // 주의: DXNToken/Staking/RevenueDistributor는 의도적으로 미배포.
+  // 토큰 경제는 법무 검토(한국: 가상자산이용자보호법/자본시장법) 및
+  // tokenomics 확정 후 별도 모듈로 배포.
 
   return {
     registry,
@@ -72,6 +88,7 @@ export default buildModule("DXDeployAmoy", (m) => {
     priceOracle,
     reverseRegistrar,
     controller,
+    reservations,
     mockUsdc,
     mockUsdt,
   };

@@ -38,6 +38,7 @@ pragma solidity ^0.8.28;
 
 import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/token/common/ERC2981.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 import {IDXRegistrar} from "./IDXRegistrar.sol";
@@ -46,9 +47,15 @@ import {IDXRegistry} from "../registry/IDXRegistry.sol";
 /// @title  DXRegistrar
 /// @notice Issues 2LD names under a given TLD (`.dex`) as ERC-721 tokens.
 ///         Lifecycle (register / renew / expiry / grace) is enforced here.
+///         EIP-2981 royalty info is exposed so secondary marketplaces
+///         (OpenSea, Magic Eden, etc.) can route a configurable share of
+///         resale proceeds to the protocol treasury.
+///
 ///         주어진 TLD(`.dex`) 하위의 2LD 이름을 ERC-721 NFT로 발행한다.
-///         도메인 생명주기(등록/갱신/만료/유예)를 담당.
-contract DXRegistrar is ERC721, IDXRegistrar, Ownable {
+///         도메인 생명주기(등록/갱신/만료/유예) 담당. EIP-2981 royalty 정보를
+///         노출하여 2차 마켓플레이스가 재판매 수익의 일부를 프로토콜
+///         금고로 자동 라우팅하도록 한다.
+contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
   IDXRegistry public immutable registry;
 
   /// @notice namehash of the TLD this registrar governs (e.g. namehash("dex")).
@@ -75,13 +82,46 @@ contract DXRegistrar is ERC721, IDXRegistrar, Ownable {
   ///         만료 후에도 갱신을 허용하는 유예 기간.
   uint256 public constant GRACE_PERIOD = 30 days;
 
+  /// @notice Initial royalty: 2.5% (250 / 10_000). Owner can update via
+  ///         `setRoyaltyInfo`. Capped at 10% in the setter to prevent
+  ///         hostile rates.
+  ///         초기 royalty 2.5%. 오너가 `setRoyaltyInfo`로 변경 가능하며,
+  ///         setter에서 10%로 상한.
+  uint96 public constant INITIAL_ROYALTY_BPS = 250;
+  uint96 public constant MAX_ROYALTY_BPS = 1000; // 10%
+
+  error RoyaltyTooHigh(uint96 requested, uint96 max);
+
   constructor(IDXRegistry _registry, bytes32 _baseNode, string memory _baseNodeName)
-    ERC721("DEXignation", "DXN")
+    ERC721("DEXignation", "DEX")
     Ownable(msg.sender)
   {
     registry = _registry;
     baseNode = _baseNode;
     baseNodeName = _baseNodeName;
+
+    // Default royalty recipient is the contract owner. Owner should call
+    // `setRoyaltyInfo` to point at the RevenueDistributor / treasury after
+    // those contracts are deployed.
+    //
+    // 기본 royalty 수령자는 컨트랙트 owner. RevenueDistributor / treasury
+    // 배포 후 owner가 `setRoyaltyInfo`로 그 주소를 지정해야 한다.
+    _setDefaultRoyalty(msg.sender, INITIAL_ROYALTY_BPS);
+  }
+
+  /// @notice Update the default royalty recipient and rate. Owner-only.
+  ///         기본 royalty 수령자와 비율 변경. 오너 전용.
+  /// @param receiver       Address to receive royalty payments (typically the
+  ///                       RevenueDistributor). / royalty 수령 주소.
+  /// @param feeNumerator   Royalty in basis points (out of 10000). Capped
+  ///                       at `MAX_ROYALTY_BPS` (10%). / 만분율.
+  function setRoyaltyInfo(address receiver, uint96 feeNumerator)
+    external onlyOwner
+  {
+    if (feeNumerator > MAX_ROYALTY_BPS) {
+      revert RoyaltyTooHigh(feeNumerator, MAX_ROYALTY_BPS);
+    }
+    _setDefaultRoyalty(receiver, feeNumerator);
   }
 
   /// @dev Reverts unless this contract currently owns the TLD node in the
@@ -145,12 +185,20 @@ contract DXRegistrar is ERC721, IDXRegistrar, Ownable {
   ) external override whenOwnsBaseNode onlyController returns (uint256) {
     if (!available(id)) revert NameNotAvailable(id);
 
-    // Guard against absurdly large `duration` values that would overflow
-    // when added to `block.timestamp`. Solidity 0.8 reverts on overflow
-    // automatically, but we surface a domain-specific error.
-    //   너무 큰 duration이 들어와 오버플로우가 나는 경우를 막기 위한 가드.
-    //   Solidity 0.8은 자동 revert지만 의미 있는 에러로 변환한다.
-    if (block.timestamp + duration + GRACE_PERIOD <= block.timestamp + GRACE_PERIOD) {
+    // Reject zero duration outright, and guard against `duration` values so
+    // large that `block.timestamp + duration` would overflow `uint256`.
+    //
+    // Without this check, an extreme duration could silently wrap to a small
+    // expiry, making the registered name immediately treatable as expired.
+    // Solidity 0.8 already reverts on overflow for the addition itself, but
+    // we surface a domain-specific `InvalidDuration` error so callers see a
+    // meaningful failure.
+    //
+    // duration이 0이거나, `block.timestamp + duration`이 uint256을 넘어가
+    // 오버플로우할 정도로 크면 거부한다. Solidity 0.8이 자동 revert지만
+    // 의미 있는 에러로 바꿔준다.
+    if (duration == 0) revert InvalidDuration();
+    if (duration > type(uint256).max - block.timestamp - GRACE_PERIOD) {
       revert InvalidDuration();
     }
 
@@ -190,7 +238,12 @@ contract DXRegistrar is ERC721, IDXRegistrar, Ownable {
       revert NameNotAvailable(id);
     }
 
-    if (expiries[id] + duration + GRACE_PERIOD <= duration + GRACE_PERIOD) {
+    // Reject zero duration, and guard against `expires + duration` overflow.
+    //
+    // duration이 0이거나, 누적 만료 시각이 uint256을 넘어 오버플로우할 정도로
+    // 크면 거부한다.
+    if (duration == 0) revert InvalidDuration();
+    if (duration > type(uint256).max - expiries[id]) {
       revert InvalidDuration();
     }
 
@@ -282,5 +335,20 @@ contract DXRegistrar is ERC721, IDXRegistrar, Ownable {
       '<text x="200" y="360" text-anchor="middle" font-family="monospace" font-size="11" fill="#2D3A48">DEXignation Name Service</text>'
       '</svg>'
     );
+  }
+
+  /// @notice EIP-165 interface advertisement. Required because we inherit
+  ///         both `ERC721` and `ERC2981`, each of which adds its own
+  ///         supported interface IDs.
+  ///         EIP-165 인터페이스 광고. ERC721과 ERC2981을 동시 상속하므로
+  ///         두 부모의 인터페이스 ID를 모두 반환하도록 override 필요.
+  function supportsInterface(bytes4 interfaceId)
+    public
+    view
+    virtual
+    override(ERC721, ERC2981, IERC165)
+    returns (bool)
+  {
+    return super.supportsInterface(interfaceId);
   }
 }

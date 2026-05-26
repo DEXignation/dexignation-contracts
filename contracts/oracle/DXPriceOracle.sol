@@ -89,6 +89,30 @@ contract DXPriceOracle is IDXPriceOracle, Ownable {
   uint256 internal constant DURATION_5Y = 5 * 365 days;
   uint256 internal constant DURATION_10Y = 10 * 365 days;
 
+  // ── Premium decay parameters / Premium 감쇠 파라미터 ────────────────────────
+  //
+  // When a name has just exited its grace period, an additional premium is
+  // charged on top of the regular rent. The premium decays via repeated
+  // half-lives until it reaches zero after `_premiumDuration` seconds.
+  //
+  // The model is intentionally simple to keep the on-chain arithmetic
+  // friendly: at each `_premiumHalfLife` interval the remaining premium is
+  // halved, with a final linear ramp-down to 0 at `_premiumDuration` so the
+  // function is continuous.
+  //
+  // 유예 기간이 막 종료된 이름에는 정상 임대료 위에 추가 premium이 붙는다.
+  // 이 premium은 반감기마다 절반씩 줄다가 `_premiumDuration` 초 후에 0이
+  // 된다. 온체인 산술이 단순하도록 의도된 모델.
+  uint256 public initialPremium;        // attoUSD
+  uint256 public premiumDuration;       // seconds, 0 disables premium
+  uint256 public premiumHalfLife;       // seconds; 0 disables premium
+
+  event PremiumConfigured(
+    uint256 initialPremium,
+    uint256 premiumDuration,
+    uint256 premiumHalfLife
+  );
+
   /// @param _rentPrices Array of 4 attoUSD prices in order: [1y, 3y, 5y, 10y].
   ///                    1/3/5/10년 attoUSD 가격 배열.
   constructor(uint256[] memory _rentPrices) Ownable(msg.sender) {
@@ -98,6 +122,47 @@ contract DXPriceOracle is IDXPriceOracle, Ownable {
     price3Year = _rentPrices[1];
     price5Year = _rentPrices[2];
     price10Year = _rentPrices[3];
+
+    // Default: premium disabled. Owner enables it via `setPremiumConfig`
+    // once a price discovery mechanism (auction / batch sale) is in place.
+    //
+    // 기본값: premium 비활성. 경매·일괄판매 같은 가격 발견 메커니즘이 준비된
+    // 뒤 owner가 `setPremiumConfig`로 활성화한다.
+    initialPremium = 0;
+    premiumDuration = 0;
+    premiumHalfLife = 0;
+  }
+
+  /// @notice Configure the premium decay curve. Owner-only.
+  ///         Premium 감쇠 곡선 설정. 오너 전용.
+  /// @param _initialPremium  attoUSD premium at the moment grace ends.
+  ///                         유예 종료 시점의 premium 시작값.
+  /// @param _premiumDuration How long the premium decays to 0 (seconds).
+  ///                         premium이 0이 될 때까지의 시간(초).
+  /// @param _premiumHalfLife Half-life of the decay (seconds). Must be > 0
+  ///                         and < `_premiumDuration`. Use 1 day for a
+  ///                         steep curve, 7 days for a gentle one.
+  ///                         반감기. 0보다 크고 `_premiumDuration`보다 작아야.
+  function setPremiumConfig(
+    uint256 _initialPremium,
+    uint256 _premiumDuration,
+    uint256 _premiumHalfLife
+  ) external onlyOwner {
+    if (_premiumDuration == 0) {
+      // Disable premium entirely.
+      initialPremium = 0;
+      premiumDuration = 0;
+      premiumHalfLife = 0;
+      emit PremiumConfigured(0, 0, 0);
+      return;
+    }
+    if (_premiumHalfLife == 0 || _premiumHalfLife >= _premiumDuration) {
+      revert InvalidPremiumConfig();
+    }
+    initialPremium = _initialPremium;
+    premiumDuration = _premiumDuration;
+    premiumHalfLife = _premiumHalfLife;
+    emit PremiumConfigured(_initialPremium, _premiumDuration, _premiumHalfLife);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -160,6 +225,56 @@ contract DXPriceOracle is IDXPriceOracle, Ownable {
   ) external view override returns (uint256) {
     return _priceAttoUSD(duration);
   }
+
+  /// @inheritdoc IDXPriceOracle
+  function premiumAttoUSD(uint256 expiredAt)
+    external
+    view
+    override
+    returns (uint256)
+  {
+    // Premium disabled: short-circuit.
+    // premium 비활성화 상태: 빠른 반환.
+    if (premiumDuration == 0 || initialPremium == 0) return 0;
+
+    // Future timestamp or "not yet expired": no premium.
+    // 미래 시각이거나 아직 만료 전: premium 없음.
+    if (expiredAt >= block.timestamp) return 0;
+
+    uint256 elapsed = block.timestamp - expiredAt;
+    if (elapsed >= premiumDuration) return 0;
+
+    // Half-life decay: `halvings` whole half-lives have elapsed, plus a
+    // fractional remainder which we approximate linearly across the final
+    // half-life. Result = initialPremium * (1/2)^halvings * (1 - frac/HL/2)
+    //
+    // For a linear-decay fallback we instead do:
+    //   premium = initialPremium * (premiumDuration - elapsed) / premiumDuration
+    // but the half-life curve gives more time for price discovery near the
+    // start of the window where the name is most valuable.
+    //
+    // 반감기 감쇠: `halvings`번의 반감기가 지났고 나머지는 마지막 반감기
+    // 안에서 선형 보간한다. 이름 가치가 가장 높은 초기 구간에서 가격 발견
+    // 시간을 더 길게 주기 위해 선형 감쇠 대신 반감기 곡선 사용.
+    uint256 halvings = elapsed / premiumHalfLife;
+    // Cap halvings to avoid shifting by more than 255 (Solidity reverts).
+    // halvings를 안전한 상한으로 제한.
+    if (halvings >= 256) return 0;
+
+    uint256 base = initialPremium >> halvings;
+    uint256 remainder = elapsed - halvings * premiumHalfLife;
+
+    // Linear interp from `base` to `base/2` across the current half-life.
+    //   현재 반감기 구간 안에서 base → base/2로 선형 보간.
+    uint256 halfwayDelta = (base * remainder) / (2 * premiumHalfLife);
+    return base - halfwayDelta;
+  }
+
+  /// @inheritdoc IDXPriceOracle
+  // The premium getters are inherited from the public state variables, but
+  // the interface signatures don't auto-resolve to those if we keep `view`
+  // on a separate function. The compiler matches public state-variable
+  // getters against view functions of the same name, so no override needed.
 
   /// @dev Return the attoUSD price for one of the allowed durations.
   ///      허용된 구간(1/3/5/10년)에 대한 attoUSD 가격 반환.

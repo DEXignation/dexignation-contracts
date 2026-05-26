@@ -2,8 +2,11 @@
 //
 // Ignition module — local deployment with Mock dependencies.
 // Useful for hardhat node + integration testing of the full payment flow.
+// Also deploys the optional auction/token-economy contracts so the full
+// system can be exercised end-to-end before mainnet.
 //
-// 로컬 배포 모듈. Mock 의존성을 함께 배포하여 결제 플로우 전체를 시험할 수 있다.
+// 로컬 배포 모듈. Mock 의존성을 함께 배포하여 결제 플로우 전체 + 선택적
+// 경매/토큰경제 컨트랙트까지 시험할 수 있다.
 
 import { buildModule } from "@nomicfoundation/hardhat-ignition/modules";
 import { keccak256, toBytes, zeroHash, encodePacked } from "viem";
@@ -34,7 +37,16 @@ const RENT_PRICES = [
 // Mock POL/USD 가격: $0.40, 8 decimals.
 const MOCK_POL_USD = 40_000_000n;
 
+// DXN governance token cap: 100M tokens.
+// DXN 거버넌스 토큰 cap: 1억 개.
+const DXN_CAP = 100_000_000n * 10n ** 18n;
+
+// Burn address used by the revenue distributor.
+const BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD" as const;
+
 export default buildModule("DXDeployLocal", (m) => {
+  const deployer = m.getAccount(0);
+
   // ── Mocks ─────────────────────────────────────────────────────────────────
   const mockUsdc = m.contract("MockERC20", ["Mock USDC", "USDC", 6], {
     id: "MockUSDC",
@@ -56,6 +68,28 @@ export default buildModule("DXDeployLocal", (m) => {
     registrar,
     registry,
     priceOracle,
+  ]);
+
+  // ── Auction infrastructure (optional, but useful for local testing) ───────
+  const reservations = m.contract("DXReservations", []);
+
+  // ── Token + revenue (LOCAL ONLY — never on mainnet without legal review) ──
+  // 토큰 + 수익 분배 (로컬 전용 — 법무 검토 없이 메인넷 절대 금지).
+  const dxnToken = m.contract("DXNToken", ["DEXignation", "DXN", DXN_CAP]);
+  const dxnStaking = m.contract("DXNStaking", [dxnToken]);
+
+  // RevenueDistributor: 70% treasury / 20% staking / 5% burn / 5% buffer.
+  const distributor = m.contract("RevenueDistributor", [
+    {
+      treasury: deployer,
+      staking: dxnStaking,
+      burnAddress: BURN_ADDRESS,
+      buffer: deployer,
+      treasuryBps: 7000,
+      stakingBps: 2000,
+      burnBps: 500,
+      bufferBps: 500,
+    },
   ]);
 
   // ── Wiring ────────────────────────────────────────────────────────────────
@@ -82,6 +116,18 @@ export default buildModule("DXDeployLocal", (m) => {
     id: "AllowUSDT",
   });
 
+  // 5. Auction / token-economy wiring.
+  m.call(controller, "setReservations", [reservations], { id: "WireReservations" });
+  m.call(controller, "setRevenueDistributor", [distributor], {
+    id: "WireDistributor",
+  });
+  m.call(registrar, "setRoyaltyInfo", [distributor, 250], {
+    id: "SetRegistrarRoyalty",
+  });
+  m.call(dxnStaking, "setNotifier", [distributor, true], {
+    id: "AuthoriseStakingNotifier",
+  });
+
   return {
     registry,
     registrar,
@@ -89,6 +135,10 @@ export default buildModule("DXDeployLocal", (m) => {
     priceOracle,
     reverseRegistrar,
     controller,
+    reservations,
+    dxnToken,
+    dxnStaking,
+    distributor,
     mockUsdc,
     mockUsdt,
     mockPolUsd,

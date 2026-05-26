@@ -44,6 +44,11 @@ interface IDXPriceOracle {
   ///      delay 파라미터가 [1시간, 48시간] 범위 밖.
   error InvalidOracleDelay();
 
+  /// @dev Premium configuration is invalid (halfLife must be > 0 and
+  ///      strictly less than duration).
+  ///      Premium 설정이 유효하지 않음 (halfLife > 0 이며 duration 미만이어야).
+  error InvalidPremiumConfig();
+
   // ── Functions ─────────────────────────────────────────────────────────────
 
   /// @notice Total price for the given duration, in wei of the native asset.
@@ -53,4 +58,27 @@ interface IDXPriceOracle {
   /// @notice Total price for the given duration, in attoUSD (1 USD = 1e18).
   ///         주어진 기간에 대한 attoUSD 단위 총액.
   function priceAttoUSD(uint256 duration) external view returns (uint256);
+
+  /// @notice Premium charged on a name that has just exited its grace
+  ///         period, in attoUSD. Decays exponentially to zero over
+  ///         `premiumDuration()` seconds. Returns 0 if `expiredAt` is in
+  ///         the future or far enough in the past that the premium has
+  ///         fully decayed.
+  ///
+  ///         유예 기간이 막 끝난 이름에 대한 attoUSD 단위 premium.
+  ///         `premiumDuration()` 초 동안 지수적으로 0으로 감쇠한다.
+  ///         `expiredAt`이 미래이거나 premium이 완전히 감쇠한 후라면 0.
+  ///
+  /// @param expiredAt Timestamp at which the name's grace period ended.
+  ///                  유예 기간이 종료된 시각.
+  function premiumAttoUSD(uint256 expiredAt) external view returns (uint256);
+
+  /// @notice Duration in seconds over which the premium decays from
+  ///         `initialPremium()` to 0.
+  ///         premium이 0으로 감쇠하는 데 걸리는 시간(초).
+  function premiumDuration() external view returns (uint256);
+
+  /// @notice Maximum premium at the moment the grace period ends, in attoUSD.
+  ///         유예 기간 종료 시점의 premium 최댓값 (attoUSD).
+  function initialPremium() external view returns (uint256);
 }

@@ -51,6 +51,8 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {IDXRegistrarController} from "./IDXRegistrarController.sol";
 import {IDXPriceOracle} from "../oracle/IDXPriceOracle.sol";
 import {DXRegistrar} from "./DXRegistrar.sol";
+import {DXReservations} from "./DXReservations.sol";
+import {RevenueDistributor} from "../revenue/RevenueDistributor.sol";
 import {IDXRegistry} from "../registry/IDXRegistry.sol";
 import {IDXResolver} from "../resolver/IDXResolver.sol";
 import "../utils/StringUtils.sol";
@@ -90,9 +92,32 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   uint256 public minCommitmentAge;
   uint256 public maxCommitmentAge;
 
+  /// @notice Optional reservations registry. If set, the controller will
+  ///         refuse open registration for any reserved label. Owner can
+  ///         set/unset via `setReservations`. A zero address disables the
+  ///         check entirely.
+  ///
+  ///         선택적 예약 레지스트리. 설정되어 있으면 예약된 라벨의 일반
+  ///         등록을 차단한다. zero address면 검사 비활성.
+  DXReservations public reservations;
+
+  /// @notice Optional revenue distributor. When set, `withdraw()` and
+  ///         `withdrawToken()` route funds here instead of to the owner.
+  ///         Zero address falls back to owner-direct withdrawal.
+  ///
+  ///         선택적 수익 분배 컨트랙트. 설정되어 있으면 `withdraw()`와
+  ///         `withdrawToken()`이 owner 대신 이곳으로 송금. 0이면 owner 직접
+  ///         송금으로 fallback.
+  RevenueDistributor public revenueDistributor;
+
   /// @dev commitment hash => timestamp at which it was committed.
   ///      commitment 해시 => commit된 시각.
   mapping(bytes32 commitment => uint256 timestamp) public commitments;
+
+  event ReservationsSet(address indexed reservations);
+  event RevenueDistributorSet(address indexed distributor);
+
+  error LabelReserved(string label);
 
   constructor(
     DXRegistrar _registrar,
@@ -105,6 +130,35 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
 
     minCommitmentAge = DEFAULT_MIN_COMMITMENT_AGE;
     maxCommitmentAge = DEFAULT_MAX_COMMITMENT_AGE;
+  }
+
+  /// @notice Attach (or detach) a reservations registry. Owner-only.
+  ///         예약 레지스트리 연결/해제. 오너 전용.
+  /// @param _reservations Address of the DXReservations contract, or
+  ///                      `address(0)` to disable reservation checks.
+  ///                      DXReservations 컨트랙트 주소. 0이면 검사 해제.
+  function setReservations(DXReservations _reservations) external onlyOwner {
+    reservations = _reservations;
+    emit ReservationsSet(address(_reservations));
+  }
+
+  /// @notice Attach (or detach) a revenue distributor. Owner-only.
+  ///         When set, `withdraw()`/`withdrawToken()` route funds here.
+  ///         수익 분배 컨트랙트 연결/해제. 오너 전용.
+  function setRevenueDistributor(RevenueDistributor _distributor) external onlyOwner {
+    revenueDistributor = _distributor;
+    emit RevenueDistributorSet(address(_distributor));
+  }
+
+  /// @dev Revert if the label is reserved AND the caller is not its
+  ///      authorised claimant.
+  ///      라벨이 예약 상태이고 호출자가 지정된 클레임 자격자가 아니면 revert.
+  function _checkReservation(string calldata label, address claimant) internal view {
+    DXReservations r = reservations;
+    if (address(r) == address(0)) return;
+    if (!r.isReserved(label)) return;
+    if (r.isClaimableBy(label, claimant)) return;
+    revert LabelReserved(label);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -132,6 +186,23 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     return priceOracle.price(duration);
   }
 
+  /// @notice Total price (rent + post-grace premium, if any) for a *specific*
+  ///         label, in wei of the native asset. If the label has never been
+  ///         registered or is still within an unexpired registration, this
+  ///         is identical to `rentPrice(duration)`.
+  ///
+  ///         특정 라벨에 대한 총 가격(임대료 + post-grace premium)을 네이티브
+  ///         자산 wei로 반환. 라벨이 미등록 상태이거나 만료되지 않은 등록
+  ///         중이면 `rentPrice(duration)`과 동일.
+  /// @param  label    Label to be registered. / 등록할 라벨.
+  /// @param  duration Registration duration in seconds. / 등록 기간(초).
+  function rentPriceFor(
+    string calldata label,
+    uint256 duration
+  ) public view returns (uint256) {
+    return _attoUSDToWei(_priceWithPremiumAttoUSD(label, duration));
+  }
+
   /// @notice Convert the attoUSD price for `duration` into the minimum
   ///         units of `token`. Uses ceiling division to avoid
   ///         underpayment due to truncation.
@@ -145,19 +216,79 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     uint256 duration,
     address token
   ) public view override returns (uint256) {
+    return _attoUSDToTokenUnits(priceOracle.priceAttoUSD(duration), token);
+  }
+
+  /// @notice Same as `rentPriceInToken`, but for a *specific* label so that
+  ///         any post-grace premium is included.
+  ///         `rentPriceInToken`과 동일하되, 특정 라벨에 대한 post-grace
+  ///         premium까지 포함한다.
+  function rentPriceInTokenFor(
+    string calldata label,
+    uint256 duration,
+    address token
+  ) public view returns (uint256) {
+    return _attoUSDToTokenUnits(_priceWithPremiumAttoUSD(label, duration), token);
+  }
+
+  /// @dev Compute base rent + premium in attoUSD for a specific label.
+  ///      특정 라벨에 대한 임대료 + premium의 attoUSD 합산.
+  function _priceWithPremiumAttoUSD(
+    string calldata label,
+    uint256 duration
+  ) internal view returns (uint256) {
+    uint256 base = priceOracle.priceAttoUSD(duration);
+
+    // Premium only applies if the name had a previous expiry. If the
+    // tokenId has no recorded expiry (`nameExpires == 0`), this is a fresh
+    // registration and there's no premium.
+    //
+    // premium은 이전 만료 기록이 있을 때만 적용. tokenId에 만료 기록이
+    // 없으면(`nameExpires == 0`) 첫 등록이므로 premium 없음.
+    bytes32 labelhash = keccak256(bytes(label));
+    uint256 previousExpires = registrar.nameExpires(uint256(labelhash));
+    if (previousExpires == 0) return base;
+
+    // Premium starts only after the grace period has fully elapsed.
+    //   premium은 유예 기간이 완전히 지난 뒤부터 적용.
+    uint256 graceEndsAt = previousExpires + registrar.GRACE_PERIOD();
+    if (block.timestamp <= graceEndsAt) return base;
+
+    uint256 premium = priceOracle.premiumAttoUSD(graceEndsAt);
+    return base + premium;
+  }
+
+  /// @dev attoUSD → wei using the oracle's current conversion path.
+  ///      attoUSD → wei 변환.
+  function _attoUSDToWei(uint256 attoUSD) internal view returns (uint256) {
+    // The oracle's `price(duration)` already converts; for a custom
+    // attoUSD value we re-run the conversion by routing through a
+    // synthetic 1-year query and scaling. Simpler: call `price(1y)` and
+    // proportion. Even simpler: call a dedicated helper if oracle adds
+    // one. For now, the oracle exposes `price(duration)` only, so we
+    // emulate by multiplying through `price1Year` / `priceAttoUSD(1y)`.
+    //
+    // To keep this PR small we re-call the oracle's full conversion path
+    // by passing through a temporary 1-year quote.
+    //
+    // 단순화를 위해 1년치 price()와 priceAttoUSD() 비율로 변환.
+    uint256 oneYearAtto = priceOracle.priceAttoUSD(365 days);
+    uint256 oneYearWei  = priceOracle.price(365 days);
+    if (oneYearAtto == 0) return 0;
+    return (attoUSD * oneYearWei) / oneYearAtto;
+  }
+
+  /// @dev attoUSD → ERC-20 token minimum units, ceiling-rounded.
+  ///      attoUSD → ERC-20 토큰 최소 단위, 올림.
+  function _attoUSDToTokenUnits(
+    uint256 attoUSD,
+    address token
+  ) internal view returns (uint256) {
     if (!allowedPaymentTokens[token]) revert TokenNotAllowed(token);
 
-    // attoUSD uses 18 decimals; tokens with decimals > 18 cannot be
-    // safely down-scaled, so we reject them.
-    //   attoUSD가 18 decimals이므로 18 초과 decimals 토큰은 안전하게
-    //   down-scale할 수 없어 거부한다.
     uint8 d = IERC20Metadata(token).decimals();
     if (d > 18) revert UnsupportedTokenDecimals(d);
 
-    uint256 attoUSD = priceOracle.priceAttoUSD(duration);
-
-    // attoUSD (1e18-scaled) → token-decimals-scaled, ceiling division.
-    //   attoUSD를 토큰 decimals로 변환. 올림 처리.
     uint256 scaleDown = 10 ** (18 - uint256(d));
     return (attoUSD + scaleDown - 1) / scaleDown;
   }
@@ -183,9 +314,12 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     bytes32 secret
   ) external payable override nonReentrant {
     _consumeCommitment(label, owner, secret);
+    _checkReservation(label, msg.sender);
 
     bytes32 labelhash = keccak256(bytes(label));
-    uint256 price_ = rentPrice(duration);
+    // Use the label-specific price so any post-grace premium is included.
+    //   라벨별 가격을 사용하여 post-grace premium이 반영되도록 한다.
+    uint256 price_ = rentPriceFor(label, duration);
 
     if (msg.value < price_) revert InsufficientFund(price_, msg.value);
     if (!available(label)) revert NameNotAvailable(label);
@@ -239,11 +373,15 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     bytes32 secret
   ) external override nonReentrant {
     _consumeCommitment(label, owner, secret);
+    _checkReservation(label, msg.sender);
 
     if (!available(label)) revert NameNotAvailable(label);
 
     bytes32 labelhash = keccak256(bytes(label));
-    uint256 amount = rentPriceInToken(duration, paymentToken);
+    // Use the label-specific token amount so any post-grace premium is
+    // pulled along with the base rent.
+    //   라벨별 토큰 금액을 사용하여 post-grace premium까지 함께 청구.
+    uint256 amount = rentPriceInTokenFor(label, duration, paymentToken);
 
     IERC20(paymentToken).safeTransferFrom(msg.sender, address(this), amount);
 
@@ -334,21 +472,38 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     maxCommitmentAge = maxAge;
   }
 
-  /// @notice Withdraw native balance to the contract owner.
-  ///         네이티브 잔액을 오너로 송금.
+  /// @notice Withdraw native balance. Routes to `revenueDistributor` if
+  ///         configured, otherwise to the contract owner (fallback for
+  ///         single-operator deployments).
+  ///         네이티브 잔액 송금. `revenueDistributor`가 설정되어 있으면
+  ///         그곳으로, 아니면 owner로 송금(단일 운영자 배포용 fallback).
   function withdraw() public override onlyOwner nonReentrant {
-    _sendNative(owner(), address(this).balance);
+    address dest = address(revenueDistributor) == address(0)
+      ? owner()
+      : address(revenueDistributor);
+    _sendNative(dest, address(this).balance);
   }
 
-  /// @notice Withdraw the full balance of `token` to the contract owner.
-  ///         토큰 잔액을 오너로 송금.
+  /// @notice Withdraw the full balance of `token`. Routes to
+  ///         `revenueDistributor` if configured, otherwise to the owner.
+  ///         특정 토큰 잔액 송금. 라우팅 규칙은 `withdraw()`와 동일.
   function withdrawToken(address token) public override onlyOwner nonReentrant {
     IERC20 t = IERC20(token);
-    t.safeTransfer(owner(), t.balanceOf(address(this)));
+    address dest = address(revenueDistributor) == address(0)
+      ? owner()
+      : address(revenueDistributor);
+    t.safeTransfer(dest, t.balanceOf(address(this)));
   }
 
   /// @notice Recover tokens accidentally sent to this contract.
-  ///         실수로 잘못 보내진 토큰 회수.
+  ///         Distinct from `withdrawToken`: this is for tokens that are
+  ///         NOT part of the protocol's revenue (e.g. an accidentally
+  ///         transferred random ERC-20), where the owner needs to send
+  ///         them to a specific recipient rather than the distributor.
+  ///
+  ///         잘못 보내진 토큰 회수. `withdrawToken`과 구분되며, 프로토콜
+  ///         수익이 아닌 임의의 토큰을 owner가 특정 수신자에게 직접 보낼 때
+  ///         사용한다.
   function recoverFunds(
     address token,
     address to,

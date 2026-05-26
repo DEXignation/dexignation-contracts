@@ -46,6 +46,10 @@ export default buildModule("DXDeployPolygon", (m) => {
     priceOracle,
   ]);
 
+  // Reservation registry for trademark / premium handling on mainnet.
+  // 메인넷의 상표/프리미엄 라벨 처리용 예약 레지스트리.
+  const reservations = m.contract("DXReservations", []);
+
   m.call(registry, "setSubnodeOwner", [zeroHash, TLD_LABEL_HASH, registrar], {
     id: "GrantTldToRegistrar",
   });
@@ -59,6 +63,24 @@ export default buildModule("DXDeployPolygon", (m) => {
   m.call(controller, "setAllowedPaymentToken", [POLYGON_USDT, true], {
     id: "AllowUSDT",
   });
+  m.call(controller, "setReservations", [reservations], { id: "WireReservations" });
+
+  // IMPORTANT: DXNToken, DXNStaking, RevenueDistributor are intentionally
+  // NOT included in the production module. Deploy them only after:
+  //   1. Tokenomics finalised and documented.
+  //   2. Legal counsel review (Korea: 가상자산이용자보호법 / 자본시장법).
+  //   3. Vesting / distribution schedule fixed.
+  //   4. Mint authority transitioned to multisig or governance.
+  //
+  // Once those are done, deploy them via a separate module and call
+  //   registrar.setRoyaltyInfo(distributor, 250)
+  //   controller.setRevenueDistributor(distributor)
+  //   distributor.setShares({...})
+  //   dxnStaking.setNotifier(distributor, true)
+  // to wire them in atomically.
+  //
+  // 중요: DXNToken/Staking/RevenueDistributor는 의도적으로 미포함. 배포
+  // 전제조건이 충족된 뒤 별도 모듈로 배포하고 위 4개 호출로 연결한다.
 
   return {
     registry,
@@ -67,5 +89,6 @@ export default buildModule("DXDeployPolygon", (m) => {
     priceOracle,
     reverseRegistrar,
     controller,
+    reservations,
   };
 });

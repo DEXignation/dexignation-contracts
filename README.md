@@ -162,14 +162,38 @@ For full attribution and license texts, see
 
 ### Contracts at a glance / 컨트랙트 한눈에
 
+**Core (always deployed):**
+
 | Contract | Responsibility | 책임 |
 |---|---|---|
 | `DXRegistry` | namehash tree of `(owner, resolver, expires)` records | namehash 트리의 owner/resolver/expires 원장 |
-| `DXRegistrar` | ERC-721 NFT minting and expiry for `.dex` 2LDs | `.dex` 2LD의 ERC-721 발행 및 만료 관리 |
+| `DXRegistrar` | ERC-721 NFT minting, expiry, EIP-2981 royalty | `.dex` 2LD의 ERC-721 발행, 만료, EIP-2981 royalty |
 | `DXRegistrarController` | User-facing entry: commit-reveal, payment, atomic resolver setup | 사용자 진입점: commit-reveal, 결제, 리졸버 원자적 설정 |
 | `DXResolver` | `(node, coinType) → addrBytes` and reverse names | coinType→addr 매핑 및 역방향 이름 |
 | `DXReverseRegistrar` | Claim `{addr}.addr.reverse` | 역방향 노드 클레임 |
-| `DXPriceOracle` | attoUSD → wei via Chainlink (Direct / ViaLink) | Chainlink로 attoUSD → wei 변환 |
+| `DXPriceOracle` | attoUSD → wei + premium decay | attoUSD → wei 변환 + 만료 후 premium 감쇠 |
+| `DXReservations` | Owner-managed reserved label registry | 오너 관리형 예약 라벨 레지스트리 |
+
+**Token economy (deploy separately, post legal review):**
+
+| Contract | Responsibility | 책임 |
+|---|---|---|
+| `DXNToken` | ERC20Votes governance token with hard cap | hard cap 있는 ERC20Votes 거버넌스 토큰 |
+| `DXNStaking` | Stake DXN, earn protocol revenue | DXN 스테이킹, 프로토콜 수익 수령 |
+| `RevenueDistributor` | Splits revenue treasury/staking/burn/buffer | 수익을 treasury/staking/burn/buffer로 분배 |
+
+> ⚠️  `DXNToken` and friends are **not deployed by the Polygon mainnet
+> Ignition module**. Tokenomics, vesting, and legal compliance (especially
+> 가상자산이용자보호법 / 자본시장법 in Korea) must be finalised first.
+>
+> `DXNToken` 등은 **Polygon 메인넷 Ignition 모듈에 포함되지 않습니다.**
+> tokenomics·vesting·법무 검토(특히 한국의 가상자산이용자보호법/자본시장법)
+> 완료 후 별도 모듈로 배포.
+
+**Utilities:**
+
+| Contract | Responsibility | 책임 |
+|---|---|---|
 | `DXNamehash` | EIP-137 namehash + EIP-181 helpers | namehash 및 역방향 헬퍼 |
 | `EVMCoinUtils` | ENSIP-11 coin-type encoding | coin-type 인코딩 |
 | `StringUtils` | UTF-8 aware `strlen` | UTF-8 인식 길이 계산 |
