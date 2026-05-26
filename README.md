@@ -173,7 +173,6 @@ For full attribution and license texts, see
 | `DXReverseRegistrar` | Claim `{addr}.addr.reverse` | 역방향 노드 클레임 |
 | `DXPriceOracle` | attoUSD → wei + premium decay | attoUSD → wei 변환 + 만료 후 premium 감쇠 |
 | `DXReservations` | Owner-managed reserved label registry | 오너 관리형 예약 라벨 레지스트리 |
-| `DXContributionSBT` | Soulbound contributor recognition NFT | 양도 불가 기여자 인정 NFT |
 
 **Utilities:**
 
@@ -184,18 +183,22 @@ For full attribution and license texts, see
 | `StringUtils` | UTF-8-aware `strlen` + strict ASCII label validator | UTF-8 인식 길이 + strict ASCII 라벨 검증 |
 
 > **Design note.** This codebase intentionally has **no governance token,
-> no staking, and no revenue distributor**. Contributor recognition is
-> handled by the Soulbound `DXContributionSBT` (no transferability, no
-> price, no investment surface). The `DXRegistrarController.setDiscountToken`
-> hook lets the owner attach any ERC-20 (e.g. a partner project's token)
-> for a flat holder discount, but the discount is policy — not a revenue
-> share — so it does not change the legal character of the service.
+> no staking, no revenue distributor, and no separate contributor token**.
+> The `.dex` domain NFTs themselves are the unit of value — they are
+> useful (resolve to wallets), transferable, and tradeable on standard
+> marketplaces. Contributor incentives are handled by funding contributors
+> with USDT so they can register .dex domains in their own name. The
+> `DXRegistrarController.setDiscountToken` hook lets the owner attach any
+> ERC-20 (e.g. a partner project's token) for a flat holder discount, but
+> the discount is policy — not a revenue share — so it does not change
+> the legal character of the service.
 >
 > **설계 노트.** 이 코드베이스는 의도적으로 **거버넌스 토큰·스테이킹·
-> RevenueDistributor를 두지 않는다.** 기여자 인정은 Soulbound
-> `DXContributionSBT` (양도 불가·가격 없음·투자상품 표면 없음)가 담당.
-> `DXRegistrarController.setDiscountToken`은 owner가 임의의 ERC-20
-> (예: 파트너 토큰)을 보유자 할인 대상으로 지정하는 후크일 뿐, 수익 분배가
+> RevenueDistributor·별도 기여자 토큰을 두지 않는다.** `.dex` 도메인 NFT
+> 자체가 가치 단위 — 실사용(지갑 resolve)이 가능하고 양도·거래 가능.
+> 기여자 인센티브는 USDT를 지급해 기여자 본인 명의로 .dex 도메인을 등록할
+> 수 있게 하는 방식. `DXRegistrarController.setDiscountToken`은 owner가
+> 임의의 ERC-20을 보유자 할인 대상으로 지정하는 후크일 뿐, 수익 분배가
 > 아니므로 서비스의 법적 성격을 바꾸지 않음.
 
 For deeper architectural narrative, see
@@ -287,45 +290,59 @@ setter 제약 (온체인 강제):
 | 활성화 시 `requiredHoldAmount > 0` | 0이면 모든 지갑이 자격 충족 (`balanceOf >= 0`이 항상 참). |
 | Owner 전용 | 컨트랙트 owner만 할인 정책 변경 가능. |
 
-### Contributor recognition (DXContributionSBT) / 기여자 인정
+### Contributor incentives / 기여자 인센티브
 
-Contributors to the DEXignation project — those who write code, design,
-write content, translate, moderate community, etc. — can receive a
-**Soulbound NFT** as on-chain recognition. The badge cannot be transferred
-or sold; it stays in the contributor's wallet as a permanent attestation
-of what they did.
+DEXignation rewards contributors (developers, designers, translators,
+community moderators, etc.) by funding them with USDT so they can register
+`.dex` domains in their own name. No separate token contract is needed —
+the `.dex` NFT itself is a useful, transferable asset that contributors
+can hold, use, or resell on standard marketplaces.
 
-DEXignation 프로젝트에 기여한 사람(코드·디자인·콘텐츠·번역·커뮤니티 운영
-등)은 **양도 불가 NFT**를 온체인 인정 표시로 받을 수 있습니다. 배지는
-판매·이전 불가하며, 기여자의 지갑에 영구적으로 남아 "무엇을 했는가"의
-증명 역할.
+DEXignation은 기여자(개발자·디자이너·번역자·커뮤니티 운영자 등)에게 USDT를
+지원하여 본인 명의로 `.dex` 도메인을 등록할 수 있게 하는 방식으로 인센티브를
+제공합니다. 별도 토큰 컨트랙트 불필요 — `.dex` NFT 자체가 실사용·양도·일반
+마켓플레이스 거래가 가능한 가치 자산.
 
-Why Soulbound? Because the badge is **recognition, not investment**.
-Removing transferability removes price discovery and prevents the badge
-from drifting into a speculative asset. The legal character of the
-service stays simple: it's an attestation, not a security and not a
-payment instrument.
+Typical flow / 일반적 흐름:
 
-왜 Soulbound인가? 배지는 **인정이지 투자가 아니기 때문**. 양도 불가로 만들면
-가격 형성 자체가 차단되고 배지가 투기 자산으로 변질되지 않음. 서비스의 법적
-성격은 단순하게 유지 — 인증서일 뿐 증권·결제 수단이 아님.
-
-```typescript
-// Owner mints a badge
-await contributionSBT.award(
-  contributorAddress,
-  "code",                                  // short category
-  "Wrote initial Polygon deployment scripts",  // description
-);
-
-// Anyone can read
-const count = await contributionSBT.badgesOf(contributorAddress);
-const cat   = await contributionSBT.category(tokenId);
-const desc  = await contributionSBT.description(tokenId);
-
-// Any transfer attempt reverts
-await contributionSBT.transferFrom(from, to, tokenId);  // reverts: SoulboundNotTransferable
 ```
+1. Owner sends USDT (e.g. $250) and a bit of POL (e.g. 10) to a
+   contributor's wallet.
+
+2. Contributor uses dexignation.com to register .dex domains in their
+   own name (commit-reveal flow, standard register() call).
+
+3. USDT flows from contributor → DXRegistrarController → back to owner
+   via withdrawToken(). The net effect is the contributor receives
+   .dex NFTs at the owner's expense (gas only).
+
+4. Contributor can hold the names, use them as wallet aliases, or list
+   them on a marketplace.
+```
+
+```
+1. Owner가 기여자 지갑에 USDT(예: $250) + POL(예: 10) 송금.
+
+2. 기여자는 dexignation.com에서 본인 명의로 .dex 도메인을 직접 등록
+   (commit-reveal 일반 register() 호출).
+
+3. USDT는 기여자 → DXRegistrarController → withdrawToken()을 통해 owner로
+   돌아옴. 순 효과: 기여자는 owner의 비용(가스만)으로 .dex NFT 수령.
+
+4. 기여자는 도메인을 보유, 지갑 별칭으로 사용, 또는 마켓플레이스 판매 가능.
+```
+
+Why this approach? Because the `.dex` NFT is already a real, tradeable
+digital good. Issuing a separate "contributor token" would add a token
+contract, a market price, and regulatory questions — for no additional
+benefit to the contributor. Funding contributors in USDT and letting
+them mint `.dex` names keeps the legal surface of the project minimal
+while delivering real value.
+
+이 방식의 이유: `.dex` NFT가 이미 실제로 거래 가능한 디지털 자산이기 때문.
+별도 "기여자 토큰" 발행은 토큰 컨트랙트·시장가격·규제 이슈를 추가할 뿐,
+기여자에게 별 이득 없음. USDT를 지급해 `.dex` 이름을 직접 mint하게 하는
+방식은 법적 표면을 최소화하면서 실질 가치는 그대로 전달.
 
 ---
 
@@ -335,7 +352,7 @@ await contributionSBT.transferFrom(from, to, tokenId);  // reverts: SoulboundNot
 dexignation/
 ├── contracts/
 │   ├── registry/        # DXRegistry, IDXRegistry
-│   ├── registrar/       # DXRegistrar, DXRegistrarController, DXReverseRegistrar
+│   ├── registrar/       # DXRegistrar, DXRegistrarController, DXReverseRegistrar, DXReservations
 │   ├── resolver/        # DXResolver
 │   ├── oracle/          # DXPriceOracle
 │   ├── utils/           # DXNamehash, EVMCoinUtils, StringUtils
@@ -497,7 +514,8 @@ DEXignation은 [`DEXignation`](https://github.com/DEXignation) GitHub
 
 - **Website**: https://dexignation.com
 - **GitHub**: https://github.com/DEXignation
-- **Security disclosures**: `security@dexignation.io`
+- **General inquiries**: `help@dexignation.com`
+- **Security disclosures**: `security@dexignation.com`
   (see [`SECURITY.md`](./SECURITY.md) for details)
 
 ---

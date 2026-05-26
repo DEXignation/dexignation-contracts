@@ -26,7 +26,7 @@ Instead, contact us privately at one of the following:
 
 대신 아래 비공개 경로로 알려주세요:
 
-- **Email**: `security@dexignation.io`
+- **Email**: `security@dexignation.com`
 - **Website**: https://dexignation.com
 - **PGP key**: fingerprint published at https://dexignation.com (footer)
 - **Signal**: on request via email

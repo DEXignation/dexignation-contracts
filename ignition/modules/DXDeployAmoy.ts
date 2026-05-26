@@ -72,15 +72,12 @@ export default buildModule("DXDeployAmoy", (m) => {
   });
   m.call(controller, "setReservations", [reservations], { id: "WireReservations" });
 
-  // NOTE: Token-economy contracts (governance ERC-20, staking, revenue
-  // distributor) are intentionally NOT deployed by this module. The
-  // current architecture uses a Soulbound `DXContributionSBT` for
-  // contributor recognition instead; see `DXDeployLocal.ts` for the full
-  // testnet set including that contract.
+  // NOTE: This module deploys only the core domain-service contracts.
+  // Incentives for contributors are provided as .dex domain NFTs paid for
+  // in USDT — there is no separate token contract.
   //
-  // 주의: 토큰 경제 컨트랙트(거버넌스 ERC-20, staking, revenue distributor)는
-  // 이 모듈에서 배포하지 않음. 현재 아키텍처는 기여자 인정용으로 Soulbound
-  // `DXContributionSBT`만 사용하며, 전체 셋업은 `DXDeployLocal.ts` 참고.
+  // 주의: 이 모듈은 핵심 도메인 서비스 컨트랙트만 배포. 기여자 인센티브는
+  // USDT로 결제된 .dex 도메인 NFT로 제공하며, 별도 토큰 컨트랙트 없음.
 
   return {
     registry,

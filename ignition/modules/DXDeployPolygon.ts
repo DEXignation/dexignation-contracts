@@ -65,13 +65,6 @@ export default buildModule("DXDeployPolygon", (m) => {
   });
   m.call(controller, "setReservations", [reservations], { id: "WireReservations" });
 
-  // Soulbound contributor recognition badge — owner-only mint, non-transferable.
-  // No tokenomics, no liquidity, no governance — purely an attestation NFT.
-  //
-  // Soulbound 기여자 배지 — owner-only mint, 양도 불가. tokenomics·유동성·
-  // 거버넌스 없음, 순수 인정 NFT.
-  const contributionSBT = m.contract("DXContributionSBT", []);
-
   // setDiscountToken is left disabled by default. The owner activates it
   // once a partner/community token (e.g. MOL on Polygon) is chosen.
   //   할인 토큰은 기본 비활성. owner가 파트너/커뮤니티 토큰(예: Polygon MOL)을
@@ -85,6 +78,5 @@ export default buildModule("DXDeployPolygon", (m) => {
     reverseRegistrar,
     controller,
     reservations,
-    contributionSBT,
   };
 });

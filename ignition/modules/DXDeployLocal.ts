@@ -45,10 +45,6 @@ export default buildModule("DXDeployLocal", (m) => {
   //   예약 레지스트리 — 오너 관리 예약 라벨.
   const reservations = m.contract("DXReservations", []);
 
-  // Soulbound contributor badge — issued by owner to project contributors.
-  //   Soulbound 기여자 배지 — owner가 프로젝트 기여자에게 발급.
-  const contributionSBT = m.contract("DXContributionSBT", []);
-
   // ── Wiring ────────────────────────────────────────────────────────────────
   m.call(registry, "setSubnodeOwner", [zeroHash, TLD_LABEL_HASH, registrar], {
     id: "GrantTldToRegistrar",
@@ -71,7 +67,6 @@ export default buildModule("DXDeployLocal", (m) => {
     reverseRegistrar,
     controller,
     reservations,
-    contributionSBT,
     mockUsdc,
     mockUsdt,
     mockPolUsd,
