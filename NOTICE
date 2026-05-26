@@ -1,0 +1,18 @@
+DEXignation Smart Contracts
+Copyright (c) 2026 DEXignation
+Website: https://dexignation.com
+GitHub:  https://github.com/DEXignation
+
+This product includes software developed by:
+- Nick Johnson and ENS Labs — https://github.com/ensdomains/ens-contracts (MIT)
+- OpenZeppelin — https://github.com/OpenZeppelin/openzeppelin-contracts (MIT)
+- Chainlink Labs — https://github.com/smartcontractkit/chainlink-local (Apache-2.0)
+
+For full attribution and license texts, see THIRD-PARTY-LICENSES.md.
+
+본 제품은 다음의 오픈소스 소프트웨어를 포함합니다:
+- Nick Johnson 및 ENS Labs — https://github.com/ensdomains/ens-contracts (MIT)
+- OpenZeppelin — https://github.com/OpenZeppelin/openzeppelin-contracts (MIT)
+- Chainlink Labs — https://github.com/smartcontractkit/chainlink-local (Apache-2.0)
+
+전체 라이선스 본문은 THIRD-PARTY-LICENSES.md를 참고하세요.

@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile contracts
+        run: npm run build
+
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Run tests
+        run: npm test
+        env:
+          # Tests run against the in-memory Hardhat network — no live keys needed.
+          # 테스트는 인메모리 Hardhat 네트워크에서 실행. 실제 키 불필요.
+          DEPLOYER_PRIVATE_KEY: ""
+          POLYGONSCAN_API_KEY: ""
+
+      - name: Check contract sizes
+        run: npm run size
+        continue-on-error: true

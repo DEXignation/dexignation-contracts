@@ -1,0 +1,286 @@
+// SPDX-License-Identifier: MIT
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// DEXignation — DXRegistrar
+//
+// Portions of this contract are derived from the ENS `BaseRegistrarImplementation`,
+// originally authored by Nick Johnson and the ENS Labs team, licensed under MIT.
+//   Source : https://github.com/ensdomains/ens-contracts
+//   File   : contracts/ethregistrar/BaseRegistrarImplementation.sol
+//   © 2018-2024 Nick Johnson / ENS Labs
+//
+// Modifications and additions Copyright (c) 2026 DEXignation, licensed under MIT.
+//
+// 이 컨트랙트의 일부는 ENS `BaseRegistrarImplementation` (Nick Johnson 및
+// ENS Labs, MIT)에서 파생되었습니다. 변경 및 추가 부분은 © 2026 DEXignation,
+// MIT License 하에 배포됩니다.
+//
+// Notable additions by DEXignation / DEXignation의 주요 추가사항:
+//   1. Fully on-chain SVG `tokenURI`. ENS NFT metadata is served off-chain;
+//      DEXignation embeds the artwork in the contract itself, removing any
+//      reliance on external hosting.
+//      tokenURI 메타데이터를 모두 온체인에서 생성한다 (Base64 인코딩된 SVG).
+//      ENS는 메타데이터를 오프체인에서 제공하지만 DEXignation은 외부 호스팅
+//      의존성을 제거하기 위해 컨트랙트 내부에 직접 임베드한다.
+//   2. `register()` takes the human-readable `label` so it can be stored
+//      for tokenURI rendering. ENS does not store the original label.
+//      `register()`가 사람이 읽을 수 있는 `label`을 인자로 받아 저장한다.
+//      ENS는 원본 라벨을 저장하지 않지만 DEXignation은 tokenURI 렌더링을
+//      위해 보관한다.
+//   3. Custom errors replace `require()` calls.
+//      가스 효율을 위해 `require` 대신 커스텀 에러를 사용.
+//   4. `GRACE_PERIOD` set to 30 days (ENS uses 90 days). This is a product
+//      decision aligned with DEXignation's renewal policy.
+//      유예 기간은 30일 (ENS는 90일). 제품 정책에 맞춘 결정.
+// ─────────────────────────────────────────────────────────────────────────────
+
+pragma solidity ^0.8.28;
+
+import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+import {IDXRegistrar} from "./IDXRegistrar.sol";
+import {IDXRegistry} from "../registry/IDXRegistry.sol";
+
+/// @title  DXRegistrar
+/// @notice Issues 2LD names under a given TLD (`.dex`) as ERC-721 tokens.
+///         Lifecycle (register / renew / expiry / grace) is enforced here.
+///         주어진 TLD(`.dex`) 하위의 2LD 이름을 ERC-721 NFT로 발행한다.
+///         도메인 생명주기(등록/갱신/만료/유예)를 담당.
+contract DXRegistrar is ERC721, IDXRegistrar, Ownable {
+  IDXRegistry public immutable registry;
+
+  /// @notice namehash of the TLD this registrar governs (e.g. namehash("dex")).
+  ///         이 Registrar가 관할하는 TLD의 namehash.
+  bytes32 public immutable baseNode;
+
+  /// @notice Human-readable form of the TLD (e.g. "dex").
+  ///         TLD의 사람이 읽을 수 있는 형태.
+  string public baseNodeName;
+
+  /// @dev tokenId (== labelhash as uint256) => expiry timestamp.
+  ///      tokenId에 대응하는 도메인의 만료 시각.
+  mapping(uint256 => uint256) expiries;
+
+  /// @dev tokenId => original label string. Used by `tokenURI`.
+  ///      tokenId에 대응하는 원본 label 문자열. tokenURI 렌더링용.
+  mapping(uint256 => string) names;
+
+  /// @dev Whitelisted controller contracts (e.g. `DXRegistrarController`).
+  ///      도메인 등록·갱신을 위임받은 컨트롤러 화이트리스트.
+  mapping(address => bool) public controllers;
+
+  /// @notice Grace period after expiry during which renewal is still allowed.
+  ///         만료 후에도 갱신을 허용하는 유예 기간.
+  uint256 public constant GRACE_PERIOD = 30 days;
+
+  constructor(IDXRegistry _registry, bytes32 _baseNode, string memory _baseNodeName)
+    ERC721("DEXignation", "DXN")
+    Ownable(msg.sender)
+  {
+    registry = _registry;
+    baseNode = _baseNode;
+    baseNodeName = _baseNodeName;
+  }
+
+  /// @dev Reverts unless this contract currently owns the TLD node in the
+  ///      registry. Prevents accidental operation if ownership has been moved.
+  ///      이 컨트랙트가 레지스트리상 TLD의 소유자가 아니면 revert.
+  modifier whenOwnsBaseNode() {
+    if (registry.owner(baseNode) != address(this)) {
+      revert NotBaseNodeOwner();
+    }
+    _;
+  }
+
+  /// @dev Reverts if `msg.sender` is not a whitelisted controller.
+  ///      호출자가 화이트리스트된 컨트롤러가 아니면 revert.
+  modifier onlyController() {
+    if (!controllers[msg.sender]) {
+      revert UnauthorizedController();
+    }
+    _;
+  }
+
+  /// @inheritdoc IDXRegistrar
+  function addController(address controller) external override onlyOwner {
+    controllers[controller] = true;
+    emit ControllerAdded(controller);
+  }
+
+  /// @inheritdoc IDXRegistrar
+  function removeController(address controller) external override onlyOwner {
+    controllers[controller] = false;
+    emit ControllerRemoved(controller);
+  }
+
+  /// @inheritdoc IDXRegistrar
+  function setResolver(address resolver) external override onlyOwner {
+    registry.setResolver(baseNode, resolver);
+  }
+
+  /// @inheritdoc IDXRegistrar
+  function nameExpires(uint256 id) external view override returns (uint256) {
+    return expiries[id];
+  }
+
+  /// @inheritdoc IDXRegistrar
+  function available(uint256 id) public view override returns (bool) {
+    return expiries[id] + GRACE_PERIOD < block.timestamp;
+  }
+
+  /// @notice Register a name. Only callable by a whitelisted controller.
+  ///         이름을 등록한다. 화이트리스트된 컨트롤러만 호출 가능.
+  /// @param label    The original label string (stored for tokenURI).
+  ///                 tokenURI 렌더링을 위해 보관할 원본 라벨.
+  /// @param id       Token id = uint256(keccak256(label)).
+  /// @param owner    Final owner of the NFT / 최종 소유자.
+  /// @param duration Registration duration in seconds / 등록 기간(초).
+  function register(
+    string calldata label,
+    uint256 id,
+    address owner,
+    uint256 duration
+  ) external override whenOwnsBaseNode onlyController returns (uint256) {
+    if (!available(id)) revert NameNotAvailable(id);
+
+    // Guard against absurdly large `duration` values that would overflow
+    // when added to `block.timestamp`. Solidity 0.8 reverts on overflow
+    // automatically, but we surface a domain-specific error.
+    //   너무 큰 duration이 들어와 오버플로우가 나는 경우를 막기 위한 가드.
+    //   Solidity 0.8은 자동 revert지만 의미 있는 에러로 변환한다.
+    if (block.timestamp + duration + GRACE_PERIOD <= block.timestamp + GRACE_PERIOD) {
+      revert InvalidDuration();
+    }
+
+    expiries[id] = block.timestamp + duration;
+    names[id] = label;
+
+    // Burn any previously-owned token before re-minting (grace period passed).
+    //   이전에 같은 id로 발행되었다가 만료된 토큰이 있으면 소각한다.
+    if (_ownerOf(id) != address(0)) {
+        _burn(id);
+    }
+    _mint(owner, id);
+
+    // Record subnode owner and expiry on the registry. Both calls require
+    // this contract to be the parent (`baseNode`) owner, which is enforced
+    // by `whenOwnsBaseNode`.
+    //   레지스트리에 서브노드의 소유자와 만료 시각을 기록한다. 두 호출 모두
+    //   부모(`baseNode`) 소유자만 가능하다.
+    registry.setSubnodeOwner(baseNode, bytes32(id), owner);
+    registry.setSubnodeExpires(baseNode, bytes32(id), expiries[id]);
+
+    emit NameRegistered(id, owner, block.timestamp + duration);
+
+    return block.timestamp + duration;
+  }
+
+  /// @notice Renew a name. The expiry is extended; ownership and resolver
+  ///         records are not touched.
+  ///         이름의 만료 시각만 연장한다. 소유자/리졸버는 건드리지 않는다.
+  function renew(
+    uint256 id,
+    uint256 duration
+  ) external override whenOwnsBaseNode onlyController returns (uint256) {
+    // Must still be within (expiry + grace) to renew.
+    //   유예 기간 이내여야 갱신 가능.
+    if (expiries[id] + GRACE_PERIOD < block.timestamp) {
+      revert NameNotAvailable(id);
+    }
+
+    if (expiries[id] + duration + GRACE_PERIOD <= duration + GRACE_PERIOD) {
+      revert InvalidDuration();
+    }
+
+    expiries[id] += duration;
+    registry.setSubnodeExpires(baseNode, bytes32(id), expiries[id]);
+    emit NameRenewed(id, expiries[id]);
+
+    return expiries[id];
+  }
+
+  /// @notice If the ERC-721 token owner and the registry owner have drifted
+  ///         (e.g. after a marketplace transfer), sync the registry back to
+  ///         match the token holder.
+  ///         ERC-721 소유자와 레지스트리 소유자가 어긋났을 때 레지스트리를
+  ///         토큰 보유자로 다시 동기화한다 (마켓플레이스 거래 후 필수).
+  function reclaim(uint256 id, address owner) external override whenOwnsBaseNode {
+    address tokenOwner = ownerOf(id);
+    if (tokenOwner == address(0)) {
+      revert TokenOwnerNotFound();
+    }
+    if (!_isAuthorized(tokenOwner, msg.sender, id)) {
+      revert Unauthorized();
+    }
+
+    registry.setSubnodeOwner(baseNode, bytes32(id), owner);
+  }
+
+  /// @notice ERC-721 `ownerOf` that also reverts when the token is expired.
+  ///         만료된 토큰은 `ownerOf`도 revert하도록 오버라이드.
+  function ownerOf(
+    uint256 tokenId
+  ) public view override(IERC721, ERC721) returns (address) {
+    if (expiries[tokenId] <= block.timestamp) {
+      revert TokenExpired(tokenId);
+    }
+    return super.ownerOf(tokenId);
+  }
+
+  /// @notice Fully on-chain NFT metadata. Returns a `data:` URI containing
+  ///         Base64-encoded JSON, whose `image` field is a Base64-encoded
+  ///         SVG rendered at call time.
+  ///         완전히 온체인에서 생성되는 NFT 메타데이터. Base64 인코딩된 JSON
+  ///         `data:` URI를 반환하며, `image` 필드는 호출 시점에 렌더된
+  ///         Base64 인코딩된 SVG.
+  function tokenURI(
+    uint256 tokenId
+  ) public view override returns (string memory) {
+    _requireOwned(tokenId);
+    string memory label = names[tokenId];
+    if (bytes(label).length == 0) {
+      label = "?";
+    }
+    string memory dotTld = string.concat(".", baseNodeName);
+    string memory svg = _generateSVG(label, dotTld);
+    string memory json = string.concat(
+      '{"name":"', label, dotTld, '",'
+      '"description":"DEXignation Name: ', label, dotTld, '",'
+      '"image":"data:image/svg+xml;base64,',
+      Base64.encode(bytes(svg)),
+      '"}'
+    );
+    return string.concat(
+      "data:application/json;base64,",
+      Base64.encode(bytes(json))
+    );
+  }
+
+  /// @dev Generate the SVG artwork for a given label. Pure function — same
+  ///      input always produces the same output.
+  ///      라벨에 대한 SVG 아트워크 생성. pure 함수.
+  function _generateSVG(
+    string memory label,
+    string memory dotTld
+  ) internal pure returns (string memory) {
+    return string.concat(
+      '<svg width="400" height="400" xmlns="http://www.w3.org/2000/svg">'
+      '<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">'
+      '<stop offset="0%" stop-color="#07080A"/>'
+      '<stop offset="100%" stop-color="#0D1117"/>'
+      '</linearGradient></defs>'
+      '<rect width="400" height="400" rx="20" fill="url(#bg)"/>'
+      '<rect x="8" y="8" width="384" height="384" rx="16" fill="none" stroke="#00DC82" stroke-opacity="0.2"/>'
+      '<text x="200" y="170" text-anchor="middle" font-family="sans-serif" font-weight="bold" font-size="40" fill="#00DC82">',
+      label,
+      '</text>'
+      '<text x="200" y="220" text-anchor="middle" font-family="sans-serif" font-size="28" fill="#64748B">',
+      dotTld,
+      '</text>'
+      '<text x="200" y="360" text-anchor="middle" font-family="monospace" font-size="11" fill="#2D3A48">DEXignation Name Service</text>'
+      '</svg>'
+    );
+  }
+}

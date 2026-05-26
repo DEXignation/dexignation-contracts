@@ -1,0 +1,58 @@
+{
+  "name": "@dexignation/contracts",
+  "version": "0.1.0",
+  "description": "DEXignation smart contracts — Polygon-native NFT name service built on the ENS reference architecture.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DEXignation/dexignation-contracts.git"
+  },
+  "homepage": "https://dexignation.com",
+  "bugs": {
+    "url": "https://github.com/DEXignation/dexignation-contracts/issues"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "hardhat compile",
+    "clean": "hardhat clean",
+    "test": "hardhat test",
+    "test:coverage": "hardhat coverage",
+    "lint": "solhint 'contracts/**/*.sol' && prettier --check '{contracts,test,ignition,scripts}/**/*.{ts,sol}'",
+    "lint:fix": "solhint 'contracts/**/*.sol' --fix && prettier --write '{contracts,test,ignition,scripts}/**/*.{ts,sol}'",
+    "format": "prettier --write '{contracts,test,ignition,scripts}/**/*.{ts,sol,json,md}'",
+    "deploy:local": "hardhat ignition deploy ignition/modules/DXDeployLocal.ts --network localhost",
+    "deploy:amoy": "hardhat ignition deploy ignition/modules/DXDeployAmoy.ts --network amoy",
+    "deploy:polygon": "hardhat ignition deploy ignition/modules/DXDeployPolygon.ts --network polygon",
+    "verify:amoy": "hardhat verify --network amoy",
+    "verify:polygon": "hardhat verify --network polygon",
+    "node": "hardhat node",
+    "size": "hardhat size-contracts"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.1.0"
+  },
+  "devDependencies": {
+    "@chainlink/contracts": "^1.3.0",
+    "@chainlink/local": "^0.2.3",
+    "@nomicfoundation/hardhat-ignition": "^3.0.0",
+    "@nomicfoundation/hardhat-network-helpers": "^1.0.12",
+    "@nomicfoundation/hardhat-toolbox-viem": "^3.0.0",
+    "@nomicfoundation/hardhat-verify": "^2.0.13",
+    "@types/chai": "^4.3.20",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.10.0",
+    "chai": "^4.5.0",
+    "dotenv": "^16.4.7",
+    "hardhat": "^3.0.0",
+    "hardhat-contract-sizer": "^2.10.0",
+    "prettier": "^3.4.2",
+    "prettier-plugin-solidity": "^1.4.2",
+    "solhint": "^5.0.5",
+    "solhint-plugin-prettier": "^0.1.0",
+    "typescript": "^5.7.2",
+    "viem": "^2.21.55"
+  }
+}

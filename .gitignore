@@ -1,0 +1,64 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# DEXignation contracts .gitignore
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Dependencies / 의존성
+node_modules/
+.pnpm-store/
+.yarn/
+
+# Environment files / 환경 변수
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+
+# Hardhat build output / Hardhat 빌드 산출물
+artifacts/
+cache/
+typechain/
+typechain-types/
+coverage/
+coverage.json
+
+# TypeScript build output
+dist/
+build/
+
+# Hardhat Ignition deployments / Ignition 배포 결과
+# Keep deployment addresses on testnet/mainnet under version control,
+# but exclude local/transient state.
+# 테스트넷/메인넷 배포 주소는 버전 관리, 로컬/일시 state는 제외.
+ignition/deployments/chain-31337/
+ignition/deployments/chain-1337/
+
+# Foundry (if mixed)
+out/
+forge-cache/
+
+# IDE / IDE 설정
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+*.log
+
+# Tmp
+.tmp/
+tmp/
+
+# Sensitive — never commit / 절대 커밋 금지
+*.key
+*.pem
+secrets/
+**/private-keys.json
