@@ -202,10 +202,15 @@ For full attribution and license texts, see
 > 아니므로 서비스의 법적 성격을 바꾸지 않음.
 
 For deeper architectural narrative, see
-[`docs/architecture.md`](./docs/architecture.md).
+[`docs/architecture.md`](./docs/architecture.md). For the rationale
+behind major design decisions (no governance token, generic discount
+hook, ASCII-only labels, etc.), see
+[`docs/architecture-decisions.md`](./docs/architecture-decisions.md).
 
-자세한 아키텍처 설명은
-[`docs/architecture.md`](./docs/architecture.md) 참고.
+자세한 아키텍처 설명은 [`docs/architecture.md`](./docs/architecture.md).
+주요 설계 결정의 배경(거버넌스 토큰 미포함, 범용 할인 후크, ASCII 라벨
+정책 등)은 [`docs/architecture-decisions.md`](./docs/architecture-decisions.md)
+참고.
 
 ---
 
@@ -358,8 +363,9 @@ dexignation/
 │   ├── utils/           # DXNamehash, EVMCoinUtils, StringUtils
 │   └── mocks/           # MockERC20, MockPriceOracle  (test-only)
 ├── docs/
-│   ├── architecture.md  # Deep-dive on every contract
-│   └── medium/          # Public-facing articles
+│   ├── architecture.md           # Deep-dive on every contract
+│   ├── architecture-decisions.md # Why decisions were made (ADRs)
+│   └── medium/                   # Public-facing articles
 ├── LICENSE              # MIT (DEXignation)
 ├── NOTICE
 ├── THIRD-PARTY-LICENSES.md
