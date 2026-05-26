@@ -79,10 +79,15 @@ export default buildModule("DXDeployLocal", (m) => {
   const dxnStaking = m.contract("DXNStaking", [dxnToken]);
 
   // RevenueDistributor: 70% treasury / 20% staking / 5% burn / 5% buffer.
+  // - staking      : DXNStaking address (ERC-20 rewards transferred + notified atomically)
+  // - nativeStakingProxy: deployer (native staking share routed here; staking
+  //                   contract only handles ERC-20, so native goes to a
+  //                   native-aware destination — treasury or a WPOL helper)
   const distributor = m.contract("RevenueDistributor", [
     {
       treasury: deployer,
       staking: dxnStaking,
+      nativeStakingProxy: deployer,
       burnAddress: BURN_ADDRESS,
       buffer: deployer,
       treasuryBps: 7000,
@@ -124,8 +129,19 @@ export default buildModule("DXDeployLocal", (m) => {
   m.call(registrar, "setRoyaltyInfo", [distributor, 250], {
     id: "SetRegistrarRoyalty",
   });
+
+  // 6. Staking setup: register reward assets BEFORE distributor can notify.
+  //    addRewardAsset is append-only; must be done before any notifyReward.
+  //    addRewardAsset은 append-only로 notifyReward 전에 호출 필수.
+  m.call(dxnStaking, "addRewardAsset", [mockUsdc], { id: "RegisterUSDCReward" });
+  m.call(dxnStaking, "addRewardAsset", [mockUsdt], { id: "RegisterUSDTReward" });
   m.call(dxnStaking, "setNotifier", [distributor, true], {
     id: "AuthoriseStakingNotifier",
+  });
+
+  // 7. Distributor → staking auto-notify on token distribution.
+  m.call(distributor, "setStakingNotifier", [dxnStaking], {
+    id: "WireStakingNotifier",
   });
 
   return {

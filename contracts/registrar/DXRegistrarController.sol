@@ -259,10 +259,16 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   // View functions / 조회 함수
   // ──────────────────────────────────────────────────────────────────────────
 
-  /// @notice A label is valid if it is at least 3 characters long.
-  ///         라벨은 3자 이상이어야 유효.
+  /// @notice A label is valid if it is (a) at least 3 characters and
+  ///         (b) strict ASCII-lowercase with digits and hyphens (no
+  ///         leading/trailing/double hyphens). This is the initial
+  ///         normalisation policy — see `StringUtils.isValidAsciiLabel`
+  ///         for full rationale.
+  ///         라벨 유효성: (a) 3자 이상, (b) strict ASCII lowercase + 숫자 +
+  ///         하이픈 (선두/말미/연속 하이픈 금지). 초기 정규화 정책 — 자세한
+  ///         사유는 `StringUtils.isValidAsciiLabel` 참고.
   function isValidLabel(string calldata label) public pure returns (bool) {
-    return label.strlen() >= 3;
+    return label.strlen() >= 3 && label.isValidAsciiLabel();
   }
 
   /// @inheritdoc IDXRegistrarController
@@ -442,7 +448,9 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     address resolver,
     bytes32 secret
   ) external payable override nonReentrant {
-    _consumeCommitment(label, owner, secret);
+    // address(0) = native-currency payment in the commitment binding.
+    //   commitment binding에서 네이티브 결제는 address(0).
+    _consumeCommitmentFull(label, owner, duration, resolver, address(0), secret);
     _checkReservation(label, msg.sender);
 
     bytes32 labelhash = keccak256(bytes(label));
@@ -508,7 +516,7 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     address paymentToken,
     bytes32 secret
   ) external override nonReentrant {
-    _consumeCommitment(label, owner, secret);
+    _consumeCommitmentFull(label, owner, duration, resolver, paymentToken, secret);
     _checkReservation(label, msg.sender);
 
     if (!available(label)) revert NameNotAvailable(label);
@@ -551,14 +559,45 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   // Commit-reveal / commit-reveal 패턴
   // ──────────────────────────────────────────────────────────────────────────
 
-  /// @notice Compute a commitment hash for the front-running mitigation flow.
-  ///         프론트러닝 방지를 위한 commitment 해시 계산.
+  /// @notice Legacy commitment hash. Kept for ABI compatibility with v1
+  ///         clients, but the controller now uses the full-binding form
+  ///         (see `makeCommitmentFull`) for reveal. The legacy form alone
+  ///         is no longer accepted at register time.
+  ///
+  ///         레거시 commitment 해시. v1 클라이언트 ABI 호환용으로 남김.
+  ///         reveal 시점에는 full-binding 형식(`makeCommitmentFull`)을
+  ///         사용하며, 레거시 형식만으로는 더 이상 register 불가.
   function makeCommitment(
     string calldata name,
     address owner,
     bytes32 secret
   ) public pure override returns (bytes32) {
     return keccak256(abi.encode(name, owner, secret));
+  }
+
+  /// @notice Strict commitment hash binding ALL register-time parameters.
+  ///         The hash includes the resolver, duration, and payment token so
+  ///         an MEV bot that observes the reveal cannot replay it with
+  ///         different parameters (e.g. swap in a malicious resolver).
+  ///
+  ///         Pass `paymentToken = address(0)` for native-currency payment.
+  ///
+  ///         모든 register-time 파라미터를 묶은 strict commitment. resolver,
+  ///         duration, payment token까지 포함하므로 MEV 봇이 reveal을 보고
+  ///         다른 파라미터로 재현(예: 악성 resolver 주입) 불가.
+  ///
+  ///         네이티브 결제 시 `paymentToken = address(0)`.
+  function makeCommitmentFull(
+    string calldata label,
+    address owner,
+    uint256 duration,
+    address resolver,
+    address paymentToken,
+    bytes32 secret
+  ) public pure returns (bytes32) {
+    return keccak256(
+      abi.encode(label, owner, duration, resolver, paymentToken, secret)
+    );
   }
 
   /// @notice Commit the hash. Caller must wait `minCommitmentAge` before
@@ -572,14 +611,22 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     commitments[commitment] = block.timestamp;
   }
 
-  /// @dev Validate and consume a commitment.
-  ///      commitment 검증 및 소비.
-  function _consumeCommitment(
+  /// @dev Validate and consume a strict commitment. Reverts if the
+  ///      commitment was never made, is too new, too old, or does not
+  ///      bind to the parameters being revealed.
+  ///      strict commitment 검증·소비. 미존재/너무 새것/너무 오래된 것/파라
+  ///      미터 미일치 모두 revert.
+  function _consumeCommitmentFull(
     string calldata label,
     address owner,
+    uint256 duration,
+    address resolver,
+    address paymentToken,
     bytes32 secret
   ) internal {
-    bytes32 commitment = makeCommitment(label, owner, secret);
+    bytes32 commitment = makeCommitmentFull(
+      label, owner, duration, resolver, paymentToken, secret
+    );
     uint256 ts = commitments[commitment];
     if (ts == 0) revert CommitmentNotFound(commitment);
     if (ts + minCommitmentAge > block.timestamp) {
@@ -590,6 +637,12 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     }
     delete commitments[commitment];
   }
+
+  /// @dev (Removed in v2.) The legacy 3-arg `_consumeCommitment` has been
+  ///      replaced by `_consumeCommitmentFull` so register-time parameters
+  ///      are cryptographically bound to the commit.
+  ///      (v2에서 제거.) 레거시 3-인자 `_consumeCommitment`는 register-time
+  ///      파라미터 binding을 위해 `_consumeCommitmentFull`로 대체됨.
 
   // ──────────────────────────────────────────────────────────────────────────
   // Owner-only configuration / 오너 전용 설정

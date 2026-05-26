@@ -28,17 +28,19 @@ const MIN_COMMITMENT_AGE = 30n;
 const ONE_MOL = 10n ** 18n;
 const ONE_MILLION_MOL = 1_000_000n * ONE_MOL;
 
-function makeCommitment(
+function makeCommitmentFull(
   label: string,
   owner: `0x${string}`,
+  duration: bigint,
+  resolver: `0x${string}`,
+  paymentToken: `0x${string}`,
   secret: `0x${string}`,
 ): `0x${string}` {
   return keccak256(
-    encodeAbiParameters(parseAbiParameters("string, address, bytes32"), [
-      label,
-      owner,
-      secret,
-    ]),
+    encodeAbiParameters(
+      parseAbiParameters("string, address, uint256, address, address, bytes32"),
+      [label, owner, duration, resolver, paymentToken, secret],
+    ),
   );
 }
 
@@ -196,8 +198,11 @@ describe("MOL holder discount", function () {
     const label = "discounted";
     const secret = `0x${"55".repeat(32)}` as `0x${string}`;
     const userAddr = alice.account.address;
+    const ZERO_ADDR = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 
-    const commitment = makeCommitment(label, userAddr, secret);
+    const commitment = makeCommitmentFull(
+      label, userAddr, ONE_YEAR, resolver.address, ZERO_ADDR, secret,
+    );
     await controller.write.commit([commitment], { account: alice.account });
 
     await publicClient.testClient.increaseTime({
@@ -234,8 +239,11 @@ describe("MOL holder discount", function () {
     const label = "fullprice";
     const secret = `0x${"66".repeat(32)}` as `0x${string}`;
     const userAddr = bob.account.address;
+    const ZERO_ADDR = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 
-    const commitment = makeCommitment(label, userAddr, secret);
+    const commitment = makeCommitmentFull(
+      label, userAddr, ONE_YEAR, resolver.address, ZERO_ADDR, secret,
+    );
     await controller.write.commit([commitment], { account: bob.account });
 
     await publicClient.testClient.increaseTime({

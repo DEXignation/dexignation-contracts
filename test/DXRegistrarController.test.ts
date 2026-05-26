@@ -35,17 +35,19 @@ function subnodeFor(parent: `0x${string}`, label: string): `0x${string}` {
   return keccak256(encodePacked(["bytes32", "bytes32"], [parent, labelHash(label)]));
 }
 
-function makeCommitment(
+function makeCommitmentFull(
   label: string,
   owner: `0x${string}`,
+  duration: bigint,
+  resolver: `0x${string}`,
+  paymentToken: `0x${string}`,
   secret: `0x${string}`,
 ): `0x${string}` {
   return keccak256(
-    encodeAbiParameters(parseAbiParameters("string, address, bytes32"), [
-      label,
-      owner,
-      secret,
-    ]),
+    encodeAbiParameters(
+      parseAbiParameters("string, address, uint256, address, address, bytes32"),
+      [label, owner, duration, resolver, paymentToken, secret],
+    ),
   );
 }
 
@@ -65,9 +67,12 @@ describe("DXRegistrarController — registration flow", function () {
     const label = "alice";
     const secret = `0x${"11".repeat(32)}` as `0x${string}`;
     const userAddr = user.account.address;
+    const ZERO_ADDR = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 
-    // 1. Commit.
-    const commitment = makeCommitment(label, userAddr, secret);
+    // 1. Commit (strict: binds resolver + duration + payment token).
+    const commitment = makeCommitmentFull(
+      label, userAddr, ONE_YEAR, resolver.address, ZERO_ADDR, secret,
+    );
     await controller.write.commit([commitment], { account: user.account });
 
     // 2. Wait past minCommitmentAge.
@@ -108,8 +113,11 @@ describe("DXRegistrarController — registration flow", function () {
     const label = "tooearly";
     const secret = `0x${"22".repeat(32)}` as `0x${string}`;
     const userAddr = user.account.address;
+    const ZERO_ADDR = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 
-    const commitment = makeCommitment(label, userAddr, secret);
+    const commitment = makeCommitmentFull(
+      label, userAddr, ONE_YEAR, resolver.address, ZERO_ADDR, secret,
+    );
     await controller.write.commit([commitment], { account: user.account });
 
     // Don't wait — reveal immediately.
@@ -127,8 +135,11 @@ describe("DXRegistrarController — registration flow", function () {
     const label = "refund";
     const secret = `0x${"33".repeat(32)}` as `0x${string}`;
     const userAddr = user.account.address;
+    const ZERO_ADDR = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 
-    const commitment = makeCommitment(label, userAddr, secret);
+    const commitment = makeCommitmentFull(
+      label, userAddr, ONE_YEAR, resolver.address, ZERO_ADDR, secret,
+    );
     await controller.write.commit([commitment], { account: user.account });
 
     await publicClient.testClient.increaseTime({
