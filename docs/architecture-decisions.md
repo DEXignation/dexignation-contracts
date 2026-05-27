@@ -672,6 +672,123 @@ transferable contributor NFT would do, with the added benefits of
 
 ---
 
+## ADR-010: Defensive balance-delta check on ERC-20 receive
+
+**Status:** Accepted (May 2026)
+**상태:** 확정 (2026년 5월)
+
+### Context / 배경
+
+`registerWithToken` and `renewWithToken` accept payment in any ERC-20
+the owner has allow-listed via `setAllowedPaymentToken`. The original
+implementation called `safeTransferFrom(payer → controller, amount)`
+and trusted that the controller's balance increased by exactly `amount`.
+
+`registerWithToken`과 `renewWithToken`은 owner가 `setAllowedPaymentToken`
+으로 허용한 임의의 ERC-20으로 결제 가능. 원래 구현은
+`safeTransferFrom(payer → controller, amount)`을 호출하고 컨트롤러 잔액이
+정확히 `amount`만큼 증가한다고 가정했음.
+
+This trust holds for normal tokens (USDC, USDT, DAI). It does **not**
+hold for two well-known categories:
+
+1. **Fee-on-transfer tokens.** Tokens that charge a fee on every
+   transfer (deflationary tokens, some reflective tokens). The recipient
+   receives `amount - fee`, but `transferFrom` succeeds and returns true.
+   The controller would credit a full payment but actually have less,
+   silently under-collecting revenue.
+
+2. **Rebasing tokens.** Tokens whose balances change between blocks
+   (e.g. via rebasing or yield accrual). The pre/post delta could
+   differ from the declared amount in either direction.
+
+정상 토큰(USDC, USDT, DAI)에는 가정이 성립. 두 부류에는 성립 안 함:
+1. fee-on-transfer 토큰 — 전송 시 수수료 차감, 수신자는 `amount - fee` 수령
+2. rebasing 토큰 — 블록 간 잔액 변동, pre/post delta가 명시값과 다를 수 있음
+
+The risk is bounded:
+- Fee-on-transfer can only happen if the owner explicitly allow-lists
+  such a token. USDC/USDT (the planned launch payment tokens) have no
+  fee mechanism.
+- The harm from silent under-collection is revenue leakage, not user
+  fund loss — the user pays exactly the declared amount; only the
+  controller's accounting is wrong.
+
+위험은 제한적:
+- fee-on-transfer는 owner가 명시적으로 허용해야만 발생. 출시 예정 결제
+  토큰(USDC/USDT)에는 수수료 메커니즘 없음.
+- 조용한 과소 수금의 해는 매출 누수일 뿐 사용자 자금 손실 아님 — 사용자는
+  정확히 명시값 결제, 컨트롤러 회계만 어긋남.
+
+Even so, defending against operator misconfiguration aligns with the
+project's "defensive design" principle (see also ADR-005 strict
+commitment binding and ADR-006 reward-asset whitelist).
+
+그래도 운영자 오설정에 대한 방어는 프로젝트의 "방어적 설계" 원칙과 일관
+(ADR-005 strict commitment binding, ADR-006 reward-asset whitelist 참조).
+
+### Decision / 결정
+
+Add an internal helper `_safeReceiveExactly(token, payer, amount)` that:
+
+1. Reads the controller's balance of `token` before the transfer.
+2. Calls `safeTransferFrom(payer, controller, amount)`.
+3. Reads the post-transfer balance.
+4. Reverts with `PaymentShortfall(token, amount, received)` if the
+   delta is less than `amount`.
+
+`registerWithToken` and `renewWithToken` use this helper instead of
+calling `safeTransferFrom` directly.
+
+내부 헬퍼 `_safeReceiveExactly(token, payer, amount)` 추가:
+1. 전송 전 컨트롤러의 `token` 잔액 읽기
+2. `safeTransferFrom(payer, controller, amount)` 호출
+3. 전송 후 잔액 읽기
+4. delta가 `amount`보다 작으면 `PaymentShortfall`로 revert
+
+`registerWithToken`과 `renewWithToken`은 `safeTransferFrom`을 직접 호출하지
+않고 이 헬퍼 사용.
+
+### Consequences / 결과
+
+**Benefits / 장점:**
+
+- Fee-on-transfer tokens cannot silently leak revenue
+- Operator misconfiguration surfaces immediately as a transaction
+  revert, not as quiet accounting drift
+- Explicit error type (`PaymentShortfall`) makes debugging
+  trivial — message contains token address, expected, and received
+
+**Trade-offs / 감수:**
+
+- ~2,300 gas overhead per ERC-20 payment (one extra `balanceOf` call).
+  Negligible vs ~200k gas for a full register.
+- Rebasing tokens with positive rebase between the pre-balance read
+  and the transfer would still credit the declared amount (received
+  ≥ amount); negative rebase would revert. Acceptable: rebasing
+  tokens are not on the launch allow-list and shouldn't be added.
+- Does not defend against `LyingBalance` tokens (where `balanceOf`
+  itself is fake). Such tokens require operator-side vetting; the
+  delta check assumes `balanceOf` is honest about the contract's own
+  balance, which is a much weaker assumption than trusting it for
+  arbitrary addresses.
+
+### Coverage / 검증 범위
+
+The `test/HostileERC20.test.ts` suite verifies:
+- Fee-on-transfer token causes `PaymentShortfall` revert (happy
+  defence path)
+- Normal token (USDC mock, zero fee) registers cleanly (no false
+  positive)
+- False-return token caught by SafeERC20 (unchanged behaviour)
+
+`test/HostileERC20.test.ts` 검증:
+- fee-on-transfer 토큰이 `PaymentShortfall`로 revert (방어 동작)
+- 정상 토큰(USDC mock, 수수료 0)은 정상 등록 (false positive 없음)
+- false-return 토큰은 SafeERC20으로 차단 (기존 동작)
+
+---
+
 ## How to add a new ADR / 새 ADR 추가 방법
 
 When making a significant architectural decision:

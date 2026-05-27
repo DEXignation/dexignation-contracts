@@ -159,6 +159,15 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   error DiscountRateTooHigh(uint256 requested, uint256 max);
   error RequiredHoldAmountIsZero();
 
+  /// @dev Thrown when an ERC-20 transferFrom delivers less than the
+  ///      expected amount. Typically indicates a fee-on-transfer token
+  ///      was allow-listed by mistake — protect the protocol's revenue
+  ///      accounting by reverting rather than silently under-collecting.
+  ///      ERC-20 transferFrom이 기대량보다 적게 도착하면 발생. 보통
+  ///      fee-on-transfer 토큰이 실수로 허용된 경우 — 조용한 과소 수금
+  ///      대신 revert로 회계 무결성 보호.
+  error PaymentShortfall(address token, uint256 expected, uint256 received);
+
   constructor(
     DXRegistrar _registrar,
     IDXRegistry _registry,
@@ -539,11 +548,13 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
 
     bytes32 labelhash = keccak256(bytes(label));
     // Use the label-specific token amount including post-grace premium AND
-    // the MOL holder discount based on caller's MOL balance.
-    //   라벨별 토큰 금액 (post-grace premium + MOL 할인 적용).
+    // the holder discount based on caller's discount-token balance.
+    //   라벨별 토큰 금액 (post-grace premium + 보유자 할인 적용).
     uint256 amount = rentPriceInTokenForPayer(label, duration, paymentToken, msg.sender);
 
-    IERC20(paymentToken).safeTransferFrom(msg.sender, address(this), amount);
+    // Use balance-delta receive to guard against fee-on-transfer tokens.
+    //   fee-on-transfer 토큰 방어용 잔액-delta 수신.
+    _safeReceiveExactly(IERC20(paymentToken), msg.sender, amount);
 
     uint256 expires = _executeRegister(label, labelhash, owner, duration, resolver);
 
@@ -558,13 +569,13 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     address paymentToken
   ) external override nonReentrant {
     bytes32 labelhash = keccak256(bytes(label));
-    // Apply MOL discount to the attoUSD price before converting to token.
-    //   attoUSD 가격에 MOL 할인 적용 후 토큰 단위로 변환.
+    // Apply holder discount to the attoUSD price before converting to token.
+    //   attoUSD 가격에 보유자 할인 적용 후 토큰 단위로 변환.
     uint256 amount = _attoUSDToTokenUnits(
       _applyDiscount(priceOracle.priceAttoUSD(duration), msg.sender),
       paymentToken
     );
-    IERC20(paymentToken).safeTransferFrom(msg.sender, address(this), amount);
+    _safeReceiveExactly(IERC20(paymentToken), msg.sender, amount);
 
     uint256 expires = registrar.renew(uint256(labelhash), duration);
 
@@ -786,5 +797,46 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     if (amount == 0) return;
     (bool sent, ) = payable(to).call{value: amount}("");
     if (!sent) revert NativeTransferFailed(to, amount);
+  }
+
+  /// @dev Pull `amount` of `token` from `payer` and verify the contract's
+  ///      balance increased by exactly `amount`. Guards against
+  ///      fee-on-transfer tokens whose `transferFrom` delivers less than
+  ///      the declared value — without this check, the controller would
+  ///      credit a full payment but actually receive less, silently
+  ///      under-collecting revenue.
+  ///
+  ///      The `amount > 0` early-exit lets callers pass 0 without an
+  ///      external call (relevant if a future config makes some duration
+  ///      free).
+  ///
+  ///      Normal tokens (USDC, USDT, DAI) deliver exactly the requested
+  ///      amount, so the additional `balanceOf` call adds ~2,300 gas
+  ///      with no functional change. A hostile or misconfigured token
+  ///      reverts with `PaymentShortfall` instead of silently leaking
+  ///      revenue.
+  ///
+  ///      `payer`에서 `token`을 `amount`만큼 가져오고 컨트랙트 잔액이
+  ///      정확히 `amount`만큼 증가했는지 검증. fee-on-transfer 토큰의
+  ///      `transferFrom`이 명시값보다 적게 도착하는 경우 방어 — 이 검사
+  ///      없으면 컨트롤러가 전액 결제로 회계 처리하나 실제로는 적게 받아
+  ///      매출 누수가 발생.
+  ///
+  ///      `amount > 0` early-exit으로 호출자가 0을 전달해도 외부 호출 없이
+  ///      처리(향후 일부 duration 무료화 가능성 대비).
+  ///
+  ///      정상 토큰(USDC, USDT, DAI)은 정확히 요청량 전달하므로 추가
+  ///      `balanceOf` 호출은 ~2,300 gas 부담만 추가. 악성/오설정 토큰은
+  ///      매출 누수 대신 `PaymentShortfall`로 revert.
+  function _safeReceiveExactly(IERC20 token, address payer, uint256 amount)
+    internal
+  {
+    if (amount == 0) return;
+    uint256 balanceBefore = token.balanceOf(address(this));
+    token.safeTransferFrom(payer, address(this), amount);
+    uint256 received = token.balanceOf(address(this)) - balanceBefore;
+    if (received < amount) {
+      revert PaymentShortfall(address(token), amount, received);
+    }
   }
 }
