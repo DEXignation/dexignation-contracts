@@ -58,7 +58,7 @@ function makeCommitmentFull(
 
 describe("DXRegistrarController — registration flow", function () {
   async function deploy() {
-    const { ignition, viem } = await network.connect();
+    const { ignition, viem } = await network.getOrCreate();
     const deployed = await ignition.deploy(DXDeployLocal);
     const [owner, user] = await viem.getWalletClients();
     const publicClient = await viem.getPublicClient();

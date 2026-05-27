@@ -44,7 +44,7 @@ function makeCommitmentFull(
 
 describe("MEV — commit-reveal resistance to parameter swapping", function () {
   async function deploy() {
-    const { ignition, viem } = await network.connect();
+    const { ignition, viem } = await network.getOrCreate();
     const deployed = await ignition.deploy(DXDeployLocal);
     const [owner, alice, attacker] = await viem.getWalletClients();
     const publicClient = await viem.getPublicClient();
@@ -206,7 +206,7 @@ describe("MEV — commit-reveal resistance to parameter swapping", function () {
 
 describe("MEV — race conditions on same label", function () {
   async function deploy() {
-    const { ignition, viem } = await network.connect();
+    const { ignition, viem } = await network.getOrCreate();
     const deployed = await ignition.deploy(DXDeployLocal);
     const [owner, alice, bob] = await viem.getWalletClients();
     const publicClient = await viem.getPublicClient();

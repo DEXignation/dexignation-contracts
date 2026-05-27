@@ -46,7 +46,7 @@ function makeCommitmentFull(
 
 describe("Holder discount", function () {
   async function deploy() {
-    const { ignition, viem } = await network.connect();
+    const { ignition, viem } = await network.getOrCreate();
     const deployed = await ignition.deploy(DXDeployLocal);
     const [owner, alice, bob] = await viem.getWalletClients();
     const publicClient = await viem.getPublicClient();

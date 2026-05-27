@@ -31,7 +31,7 @@ async function expectRevert(
 
 describe("DXReservations", function () {
   async function deploy() {
-    const { viem } = await network.connect();
+    const { viem } = await network.getOrCreate();
     const [owner, releaser, alice] = await viem.getWalletClients();
     const reservations = await viem.deployContract("DXReservations", []);
     return { reservations, owner, releaser, alice };

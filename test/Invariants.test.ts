@@ -43,7 +43,7 @@ function makeCommitmentFull(
 
 describe("Invariants — system-wide properties that must always hold", function () {
   async function deploy() {
-    const { ignition, viem } = await network.connect();
+    const { ignition, viem } = await network.getOrCreate();
     const deployed = await ignition.deploy(DXDeployLocal);
     const [owner, alice, bob, carol] = await viem.getWalletClients();
     const publicClient = await viem.getPublicClient();

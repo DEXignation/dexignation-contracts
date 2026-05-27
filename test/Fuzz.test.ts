@@ -74,7 +74,7 @@ function randomInvalidLabel(rng: SeededRandom): string {
 
 describe("Fuzz — register with random valid labels", function () {
   async function deploy() {
-    const { ignition, viem } = await network.connect();
+    const { ignition, viem } = await network.getOrCreate();
     const deployed = await ignition.deploy(DXDeployLocal);
     const [owner, alice, bob, carol] = await viem.getWalletClients();
     const publicClient = await viem.getPublicClient();
@@ -144,7 +144,7 @@ describe("Fuzz — register with random valid labels", function () {
 
 describe("Fuzz — discount applies correctly across many configurations", function () {
   async function deploy() {
-    const { ignition, viem } = await network.connect();
+    const { ignition, viem } = await network.getOrCreate();
     const deployed = await ignition.deploy(DXDeployLocal);
     const [owner, alice] = await viem.getWalletClients();
     return { ...deployed, owner, alice, viem };

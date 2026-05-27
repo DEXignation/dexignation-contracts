@@ -12,14 +12,14 @@ import { namehash } from "viem/ens";
 
 describe("DXNamehash", function () {
   it("matches viem reference for the empty name", async function () {
-    const { viem } = await network.connect();
+    const { viem } = await network.getOrCreate();
     const lib = await viem.deployContract("DXNamehashTestHarness");
     const result = await lib.read.namehash([""]);
     expect(result).to.equal(namehash(""));
   });
 
   it("matches viem for single-label names", async function () {
-    const { viem } = await network.connect();
+    const { viem } = await network.getOrCreate();
     const lib = await viem.deployContract("DXNamehashTestHarness");
     for (const label of ["dex", "eth", "polygon", "test"]) {
       expect(await lib.read.namehash([label])).to.equal(namehash(label));
@@ -27,7 +27,7 @@ describe("DXNamehash", function () {
   });
 
   it("matches viem for multi-label names", async function () {
-    const { viem } = await network.connect();
+    const { viem } = await network.getOrCreate();
     const lib = await viem.deployContract("DXNamehashTestHarness");
     const cases = [
       "alice.dex",
@@ -41,7 +41,7 @@ describe("DXNamehash", function () {
   });
 
   it("rejects empty labels (e.g. trailing dot, double dot)", async function () {
-    const { viem } = await network.connect();
+    const { viem } = await network.getOrCreate();
     const lib = await viem.deployContract("DXNamehashTestHarness");
 
     async function expectEmptyDnsLabel(name: string) {
