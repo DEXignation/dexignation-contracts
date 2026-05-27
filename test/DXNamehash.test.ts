@@ -43,7 +43,18 @@ describe("DXNamehash", function () {
   it("rejects empty labels (e.g. trailing dot, double dot)", async function () {
     const { viem } = await network.connect();
     const lib = await viem.deployContract("DXNamehashTestHarness");
-    await expect(lib.read.namehash(["alice..dex"])).to.be.rejected;
-    await expect(lib.read.namehash(["alice."])).to.be.rejected;
+
+    async function expectEmptyDnsLabel(name: string) {
+      try {
+        await lib.read.namehash([name]);
+        throw new Error(`Expected EmptyDnsLabel revert for ${name}`);
+      } catch (err: any) {
+        expect(String(err)).to.include("EmptyDnsLabel");
+      }
+    }
+
+    await expectEmptyDnsLabel("alice..dex");
+    await expectEmptyDnsLabel("alice.");
+    await expectEmptyDnsLabel(".alice");
   });
 });

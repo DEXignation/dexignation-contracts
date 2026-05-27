@@ -8,6 +8,27 @@
 import { expect } from "chai";
 import { network } from "hardhat";
 
+async function expectRevert(
+  promise: Promise<unknown>,
+  keyword?: string,
+): Promise<void> {
+  try {
+    await promise;
+  } catch (err: unknown) {
+    if (keyword) {
+      expect(String(err)).to.include(keyword);
+    }
+    return;
+  }
+
+  throw new Error(
+    keyword
+      ? `Expected transaction/read to revert with ${keyword}`
+      : "Expected transaction/read to revert",
+  );
+}
+
+
 describe("DXReservations", function () {
   async function deploy() {
     const { viem } = await network.connect();
@@ -33,12 +54,12 @@ describe("DXReservations", function () {
 
   it("non-owner cannot reserve", async function () {
     const { reservations, alice } = await deploy();
-    await expect(
+    await expectRevert(
       reservations.write.reserveLabel(
         ["samsung", 1, "0x0000000000000000000000000000000000000000"],
         { account: alice.account },
       ),
-    ).to.be.rejected;
+    );
   });
 
   it("bulk reservation works", async function () {
@@ -59,12 +80,12 @@ describe("DXReservations", function () {
       ["samsung", 1, "0x0000000000000000000000000000000000000000"],
       { account: owner.account },
     );
-    await expect(
+    await expectRevert(
       reservations.write.reserveLabel(
         ["samsung", 1, "0x0000000000000000000000000000000000000000"],
         { account: owner.account },
       ),
-    ).to.be.rejected;
+    );
   });
 
   it("owner can release", async function () {
@@ -98,9 +119,9 @@ describe("DXReservations", function () {
       ["samsung", 1, "0x0000000000000000000000000000000000000000"],
       { account: owner.account },
     );
-    await expect(
+    await expectRevert(
       reservations.write.releaseLabel(["samsung"], { account: alice.account }),
-    ).to.be.rejected;
+    );
   });
 
   it("isClaimableBy returns true only for the recorded claimant", async function () {
