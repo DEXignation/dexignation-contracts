@@ -385,6 +385,124 @@ scriptPubKeys).
 길이를 강제합니다. 아니면 임의 길이 허용(가변 길이 scriptPubKey를 가진
 비트코인 등 비EVM 체인 지원).
 
+### 6.3 Text records (EIP-634)
+
+`DXResolver` implements EIP-634 text records — free-form
+key/value strings per `(node, key)` pair. Wallets and dApps
+use these for profile metadata: `avatar`, `url`, `email`,
+`description`, namespaced verifications like `com.twitter`
+and `com.github`.
+
+`DXResolver`는 EIP-634 텍스트 레코드를 구현합니다 — `(node, key)`
+쌍당 자유 키/값 문자열. 지갑과 dApp이 프로파일 메타데이터에
+사용: `avatar`, `url`, `email`, `description`, `com.twitter`,
+`com.github` 등.
+
+```solidity
+function text(bytes32 node, string calldata key) external view returns (string memory);
+function setText(bytes32 node, string calldata key, string calldata value) external;
+```
+
+Length bounds are enforced to prevent storage DoS:
+
+DoS 방지를 위한 길이 상한 적용:
+
+| Field | Maximum |
+|---|---|
+| Key length | 64 bytes |
+| Value length | 1024 bytes |
+
+The `TextChanged` event emits the key twice — once as
+indexed (allowing topic-based filtering at the hashed key
+level) and once as a non-indexed string (preserving the
+original text for indexers reading event data). This is
+the standard ENS pattern.
+
+`TextChanged` 이벤트는 키를 두 번 emit — 한 번은 indexed
+(해시된 키 수준에서 topic 기반 필터링 가능), 한 번은
+non-indexed 문자열(이벤트 데이터를 읽는 인덱서를 위해
+원본 텍스트 보존). ENS 표준 패턴.
+
+Empty value writes clear the record (`delete texts[node][key]`).
+Reads against expired nodes return the empty string rather
+than reverting — matches ENS behaviour.
+
+빈 값 쓰기는 레코드 삭제. 만료된 노드에 대한 읽기는 revert
+대신 빈 문자열 반환 — ENS 동작과 일치.
+
+### 6.4 Contenthash (EIP-1577)
+
+`DXResolver` implements EIP-1577 contenthash — raw bytes per
+node, with a multicodec prefix identifying the target
+protocol. This lets `.dex` domains host decentralized
+websites that IPFS-aware browsers (Brave, Opera, Chromium
+with extensions) can resolve directly.
+
+`DXResolver`는 EIP-1577 contenthash를 구현합니다 — 노드당
+raw 바이트, multicodec prefix로 대상 프로토콜 식별. `.dex`
+도메인이 IPFS 인식 브라우저(Brave, Opera 등)가 직접 해석
+가능한 분산형 웹사이트를 호스팅 가능.
+
+```solidity
+function contenthash(bytes32 node) external view returns (bytes memory);
+function setContenthash(bytes32 node, bytes calldata hash) external;
+```
+
+The bytes are stored as provided. The contract does *not*
+validate the multicodec format on-chain — frontends parse
+the prefix and dispatch to the appropriate handler. This
+matches ENS and avoids hard-coding a protocol allowlist.
+
+바이트는 제공된 그대로 저장. 컨트랙트는 on-chain에서 multicodec
+형식을 *검증하지 않음* — 프론트엔드가 prefix를 파싱해 적절한
+핸들러로 dispatch. ENS와 일치하며 프로토콜 화이트리스트
+하드코딩을 피함.
+
+Common encodings:
+
+| Codec prefix | Protocol |
+|---|---|
+| `0xe301...` | IPFS (CIDv1) |
+| `0xe5...` | IPNS |
+| `0xe4...` | Swarm |
+| `0x90...` | Arweave |
+
+Length bound: 128 bytes (the longest existing protocol
+encoding fits in 64; 128 gives generous headroom).
+
+길이 상한: 128바이트. 기존 프로토콜 인코딩 중 가장 긴 것이
+64 이하 — 128은 여유 확보.
+
+### 6.5 ERC-165 supportsInterface
+
+`DXResolver.supportsInterface(bytes4)` reports support for
+five standard interface IDs, letting ENS-compatible tooling
+(wallet libraries, indexers, the official ENS app) detect
+which resolver profiles are implemented without trial and
+error.
+
+`DXResolver.supportsInterface(bytes4)`가 다섯 가지 표준
+interface ID에 대한 지원을 보고 — ENS 호환 툴(지갑 라이브러리,
+인덱서, 공식 ENS 앱)이 시행착오 없이 어떤 리졸버 프로파일이
+구현됐는지 탐지 가능.
+
+| Interface ID | Standard | Profile |
+|---|---|---|
+| `0x01ffc9a7` | ERC-165 | self-identification |
+| `0xf1cb7e06` | ENSIP-9 | multi-coin `addr(node, coinType)` |
+| `0x59d1d43c` | EIP-634 | `text(node, key)` |
+| `0xbc1c58d1` | EIP-1577 | `contenthash(node)` |
+| `0x691f3431` | ENS spec | `name(node)` reverse |
+
+The practical consequence: every wallet and dApp that
+already integrates with ENS resolvers can read `.dex`
+records through their existing code path, because the
+function signatures and event signatures are byte-identical.
+
+실용적 결과: ENS 리졸버와 이미 통합한 모든 지갑·dApp이 기존
+코드 경로로 `.dex` 레코드를 읽을 수 있음 — 함수 시그니처와
+이벤트 시그니처가 바이트 단위로 동일하기 때문.
+
 ---
 
 ## 7. Reverse resolution / 역방향 해결
@@ -565,8 +683,11 @@ DEXignation rotate the controller without disturbing the registrar.
 | Label storage | Hash only | Hash + original string |
 | Coin-type encoding | ENSIP-9 / ENSIP-11 | ENSIP-9 / ENSIP-11 (compatible) |
 | Reverse resolution | Yes | Yes |
-| Subdomains | Yes (by name owner) | Future work |
-| Text records | Yes | Future work |
+| Text records (EIP-634) | Yes | Yes (compatible signatures) |
+| Contenthash (EIP-1577) | Yes | Yes (compatible signatures) |
+| ERC-165 supportsInterface | Yes | Yes (5 interface IDs reported) |
+| Voluntary burn after grace | No (lingers) | Yes (permissionless) |
+| Subdomains | Yes (by name owner) | Future work (v1.1) |
 | Off-chain resolution | CCIP-Read | Future work |
 | Audit | Multiple | Pending |
 
@@ -581,5 +702,8 @@ DEXignation rotate the controller without disturbing the registrar.
 - [ENS docs](https://docs.ens.domains) — Upstream reference
 - [EIP-137](https://eips.ethereum.org/EIPS/eip-137) — Domain name standard
 - [EIP-181](https://eips.ethereum.org/EIPS/eip-181) — Reverse resolution
+- [EIP-634](https://eips.ethereum.org/EIPS/eip-634) — Text records
+- [EIP-1577](https://eips.ethereum.org/EIPS/eip-1577) — Contenthash
+- [ERC-165](https://eips.ethereum.org/EIPS/eip-165) — Standard interface detection
 - [ENSIP-9](https://docs.ens.domains/ensip/9) — `multicoinAddress`
 - [ENSIP-11](https://docs.ens.domains/ensip/11) — EVM chain coin types

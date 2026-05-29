@@ -789,6 +789,353 @@ The `test/HostileERC20.test.ts` suite verifies:
 
 ---
 
+## ADR-011: Resolver profile expansion — text records and contenthash
+
+**Status:** Accepted (May 2026)
+**상태:** 확정 (2026년 5월)
+
+### Context / 배경
+
+The v0.9 resolver supported only three things: multi-coin addresses
+(ENSIP-9 / ENSIP-11), reverse-name resolution (anti-spoofed), and
+operator approval. Pre-mainnet feature-parity review against ENS,
+Unstoppable Domains, and Base Names exposed two missing standard
+resolver profiles that every major wallet and dApp already integrates
+with on the ENS side.
+
+v0.9 리졸버는 세 가지만 지원했음: 다중 코인 주소(ENSIP-9/11), 역방향
+이름 해결(위조 방지), operator 승인. 메인넷 직전 ENS, Unstoppable
+Domains, Base Names 대비 기능 검토 결과, 모든 주요 지갑·dApp이 ENS
+쪽에서 이미 통합한 두 가지 표준 리졸버 프로파일이 빠져 있었음.
+
+The missing profiles are:
+
+1. **EIP-634 — Text records.** Free-form key/value strings per
+   `(node, key)` pair. The canonical use cases are `avatar`,
+   `url`, `email`, `description`, and namespaced verifications
+   like `com.twitter`, `com.github`, `org.telegram`. Without this,
+   wallets cannot render profile cards for `.dex` domains.
+
+2. **EIP-1577 — Contenthash.** Raw bytes per node, encoded with a
+   multicodec prefix that identifies the target protocol (IPFS,
+   IPNS, Swarm, Arweave). Without this, `.dex` domains cannot host
+   decentralized websites that IPFS-aware browsers (Brave, Opera,
+   Chromium with extensions) can resolve directly.
+
+누락된 프로파일:
+
+1. **EIP-634 — 텍스트 레코드.** `(node, key)` 쌍당 자유 키/값 문자열.
+   대표 사용 사례: `avatar`, `url`, `email`, `description`,
+   `com.twitter`, `com.github` 같은 namespaced 검증. 이게 없으면
+   지갑이 `.dex` 도메인의 프로파일 카드를 렌더링할 수 없음.
+
+2. **EIP-1577 — Contenthash.** 노드당 raw 바이트, multicodec prefix로
+   대상 프로토콜(IPFS, IPNS, Swarm, Arweave) 식별. 이게 없으면
+   `.dex` 도메인이 IPFS 인식 브라우저(Brave, Opera 등)가 직접 해석
+   가능한 분산형 웹사이트를 호스팅할 수 없음.
+
+A third item — ERC-165 `supportsInterface` — was missing entirely.
+Without it, ENS-compatible tooling has no way to detect which
+resolver profiles are implemented and must hardcode the assumption
+or fall back to "try every call and see what works."
+
+세 번째 누락 — ERC-165 `supportsInterface`. 이게 없으면 ENS 호환
+툴이 어떤 리졸버 프로파일이 구현됐는지 탐지할 방법이 없고, 하드코딩
+가정을 하거나 "모든 호출을 시도해보고 작동하는 거 쓰기" 방식으로
+fallback해야 함.
+
+### Decision / 결정
+
+Extend `DXResolver` to implement EIP-634 and EIP-1577 *exactly* as
+ENS implements them — same function signatures, same event signatures,
+same indexed/non-indexed key pattern in `TextChanged`, same raw-bytes
+storage in `contenthash`. Add ERC-165 `supportsInterface` reporting
+all five relevant interface IDs.
+
+`DXResolver`를 ENS와 *정확히 동일하게* EIP-634와 EIP-1577 구현 —
+같은 함수 시그니처, 같은 이벤트 시그니처, `TextChanged`의 indexed/
+non-indexed 키 패턴 동일, contenthash의 raw 바이트 저장 방식 동일.
+다섯 개의 관련 interface ID를 보고하는 ERC-165 `supportsInterface`
+추가.
+
+The four reported interface IDs (beyond `0x01ffc9a7` for ERC-165
+itself) are:
+
+- `0xf1cb7e06` — ENSIP-9 multi-coin `addr(node, coinType)` (already implemented)
+- `0x59d1d43c` — EIP-634 `text(node, key)` (new)
+- `0xbc1c58d1` — EIP-1577 `contenthash(node)` (new)
+- `0x691f3431` — ENS `name(node)` reverse (already implemented)
+
+ERC-165 자체(`0x01ffc9a7`) 외에 보고되는 네 가지 interface ID:
+ENSIP-9 다중 코인, EIP-634 텍스트, EIP-1577 contenthash, ENS
+역방향 이름.
+
+To prevent gas-DoS on storage writes, three length bounds are added:
+
+```solidity
+uint256 public constant MAX_TEXT_KEY_LENGTH = 64;
+uint256 public constant MAX_TEXT_VALUE_LENGTH = 1024;
+uint256 public constant MAX_CONTENTHASH_LENGTH = 128;
+```
+
+These are generous; the longest common ENS text key is around 30
+characters, and the longest EIP-1577 contenthash encoding for any
+existing protocol fits in 64 bytes.
+
+쓰기 가스 DoS 방지를 위해 세 가지 길이 상한 추가. 여유 있는 값
+— 가장 긴 일반 ENS 텍스트 키는 약 30자, 기존 프로토콜의 가장 긴
+EIP-1577 contenthash 인코딩도 64바이트 이하.
+
+### Why not other profiles? / 왜 다른 프로파일은 제외했나?
+
+ENS exposes additional resolver profiles that we deliberately did
+*not* implement:
+
+- **ABI records** (`0x2203ab56`) — barely used in production
+  (~0.1% of ENS names). Adds complexity for no realistic benefit.
+- **DNS records** (`0xa8fa5682`) — requires a DNSSEC bridge to
+  Ethereum; out of scope for v1.
+- **Public key records** (`0xc8690233`) — deprecated by ENS itself
+  in favour of text records like `pubkey.0x...`.
+- **Interface records** (`0x01ffc9a7`-style discovery for arbitrary
+  contracts) — speculative use case; not used by any major wallet.
+
+ENS의 다른 리졸버 프로파일은 의도적으로 미구현. ABI 레코드(실사용
+~0.1%), DNS 레코드(DNSSEC 브리지 필요, v1 범위 외), 공개키 레코드
+(ENS 자체에서 deprecated), Interface 레코드(투기적 사용 사례).
+
+### Consequences / 결과
+
+**Benefits / 장점:**
+
+- Wallets that integrate with ENS (MetaMask, Rainbow, Frame, Coinbase
+  Wallet, etc.) can read `.dex` profile cards using their existing
+  ENS code path. No `.dex`-specific plugin needed.
+- IPFS-aware browsers can resolve `.dex` domains to IPFS sites
+  directly, again with no new integration work on their side.
+- ENS-compatible indexers (The Graph subgraphs, ENS-data services)
+  can index `.dex` records by pointing at our resolver address —
+  schema is byte-identical.
+- The official ENS app could, in principle, resolve a `.dex` name.
+  It won't, because its UI hardcodes `.eth`, but the resolver
+  interface is interchangeable.
+
+**Trade-offs / 감수:**
+
+- ~150 lines of additional contract code (two new storage mappings,
+  four new external functions, one ERC-165 view function, four
+  events/errors).
+- ~2,300 gas overhead per resolver read (the `_isExpired` modifier
+  now runs on text and contenthash reads too).
+- Resolver storage layout adds two mappings. Future migrations to
+  a new resolver contract must either re-populate these or accept
+  partial data loss.
+- Three new error types and two new events expand the ABI surface
+  that frontends and indexers need to know about.
+
+### Coverage / 검증 범위
+
+The `test/Resolver-Text.test.ts` and `test/Resolver-Contenthash.test.ts`
+suites together verify (21 tests):
+
+- Set, read, overwrite, and delete operations for both record types
+- Authorization (owner-only writes; operator approval via
+  `setApprovalForAll`)
+- Length bounds (rejection above max; acceptance at exact max)
+- Expiry behaviour (reads return empty after `expiry + GRACE_PERIOD`)
+- ERC-165 reports `true` for both `0x59d1d43c` and `0xbc1c58d1`
+- Sample IPFS and IPNS contenthashes round-trip byte-for-byte
+
+`test/Resolver-Text.test.ts`와 `test/Resolver-Contenthash.test.ts`가
+총 21개 테스트로 검증: 양쪽 레코드 타입의 set/read/overwrite/delete,
+권한(owner-only 쓰기, operator 승인), 길이 상한, 만료 후 동작,
+ERC-165 보고, IPFS/IPNS 샘플 해시 round-trip.
+
+---
+
+## ADR-012: Permissionless voluntary burn after grace period
+
+**Status:** Accepted (May 2026)
+**상태:** 확정 (2026년 5월)
+
+### Context / 배경
+
+When a `.dex` domain expires and the holder does not renew within
+the 30-day grace period, the domain becomes "available" again — any
+new registrant can claim it. However, the underlying ERC-721 token
+does not automatically disappear from the chain. Its `ownerOf()`
+reverts (because `DXRegistrar.ownerOf` is overridden to revert on
+expired tokens), but indexers such as OpenSea, Rarible, and
+aggregators continue to display the token as an asset of the previous
+holder. This creates "ghost" marketplace listings of names that are,
+in protocol terms, no longer owned by anyone.
+
+`.dex` 도메인이 만료되고 보유자가 30일 유예 기간 내 갱신하지 않으면
+도메인은 다시 "사용 가능"이 됨 — 누구나 새로 등록 가능. 그러나 기반
+ERC-721 토큰은 자동으로 체인에서 사라지지 않음. `ownerOf()`는 revert
+하지만(만료 토큰에 대해 revert하도록 override됨), OpenSea, Rarible,
+aggregator 같은 인덱서는 그 토큰을 이전 보유자의 자산으로 계속 표시.
+프로토콜상 더 이상 누구의 소유도 아닌 이름의 "유령" 마켓플레이스
+리스팅이 발생.
+
+The previous holder has no economic incentive to clean up these
+ghost listings: they let the name lapse precisely because they no
+longer cared about it, and asking them to spend gas now would be
+strange. Meanwhile, the existence of stale listings creates
+real user confusion ("why is this name listed by someone else
+when it's marked as 'available'?") and pollutes marketplace
+search results.
+
+이전 보유자는 유령 리스팅 정리에 경제적 인센티브 없음 — 더 이상
+관심 없어서 이름을 만료시킨 건데, 이제 와서 가스를 쓰라고 요청하는
+건 이상함. 한편 stale 리스팅의 존재는 실제 사용자 혼란을 야기
+("'available'로 표시된 이름인데 왜 다른 사람이 listing 중?")하고
+마켓플레이스 검색 결과를 오염시킴.
+
+A partial mitigation already existed: when someone re-registers an
+expired name, the `register()` function internally calls `_burn()`
+on the old token before minting the new one. But this only fires
+when re-registration happens. If a name expires and is never
+re-registered, the token lingers indefinitely.
+
+부분적 완화책은 이미 존재 — 누군가 만료된 이름을 재등록하면
+`register()` 함수가 내부적으로 새 토큰 mint 전에 옛 토큰에 `_burn()`
+호출. 그러나 이건 재등록이 일어날 때만 동작. 이름이 만료되고
+재등록되지 않으면 토큰은 무기한 남음.
+
+### Decision / 결정
+
+Add a permissionless `burn(uint256 id)` function to `DXRegistrar`
+that anyone can call once `expiry + GRACE_PERIOD < block.timestamp`.
+The function deletes the ERC-721 token, the label string, and the
+expiry record. Also update the existing implicit-burn inside
+`register()` to emit `NameBurned` for consistency.
+
+`DXRegistrar`에 권한 불필요 `burn(uint256 id)` 함수 추가 — `expiry
++ GRACE_PERIOD < block.timestamp`이면 누구나 호출 가능. ERC-721
+토큰, 라벨 문자열, 만료 기록 모두 삭제. `register()` 내부의 기존
+묵시적 burn도 일관성을 위해 `NameBurned` 이벤트 emit하도록 갱신.
+
+```solidity
+function burn(uint256 id) external override {
+  address prevOwner = _ownerOf(id);
+  if (prevOwner == address(0)) {
+    revert TokenOwnerNotFound();
+  }
+  if (!available(id)) {
+    revert NotYetBurnable(id, expiries[id] + GRACE_PERIOD + 1);
+  }
+
+  _burn(id);
+  delete expiries[id];
+  delete names[id];
+
+  emit NameBurned(id, prevOwner);
+}
+```
+
+### Why permissionless? / 왜 권한 불필요인가?
+
+The alternative — restricting burn to the previous holder — was
+considered and rejected.
+
+대안 — burn을 이전 보유자로 제한 — 검토 후 거부.
+
+**Restricted burn fails because:**
+
+- The previous holder, by definition, has stopped caring about the
+  name. Asking them to spend gas now violates the original premise.
+- Third parties (marketplace indexers, community cleanup scripts,
+  competitive name services) *do* have an incentive to clean up
+  stale listings, but cannot under a restricted model.
+- The safety bound — only burnable after `expiry + GRACE_PERIOD` —
+  makes permissionless burn risk-free for legitimate holders. The
+  grace period is non-negotiable; if it hasn't passed, `available()`
+  returns false and `burn()` reverts with `NotYetBurnable`.
+
+**제한된 burn이 안 되는 이유:**
+
+- 이전 보유자는 정의상 그 이름에 관심을 잃은 사람. 이제 가스를 쓰라
+  요청하면 원래 전제 위반.
+- 제3자(마켓 인덱서, 커뮤니티 정리 스크립트, 경쟁 이름 서비스)는
+  stale 리스팅 정리에 인센티브 *있음*. 제한 모델로는 불가능.
+- 안전 한계 — `expiry + GRACE_PERIOD` 이후만 burn 가능 — 가 정당
+  보유자에게 권한 불필요 burn을 무위험으로 만듦. 유예 기간이
+  지나지 않았으면 `available()`은 false, `burn()`은 `NotYetBurnable`로
+  revert.
+
+There is no way for permissionless burn to harm a legitimate holder
+because `available()` is a strict, monotonic function of time and
+the stored expiry. It can only return `true` if the holder has both
+let the name expire *and* chosen not to renew during the entire
+30-day grace window.
+
+권한 불필요 burn이 정당 보유자에게 해를 끼칠 방법 없음 — `available()`
+은 시간과 저장된 만료의 엄격한 단조 함수. 보유자가 이름을 만료시키고
+*그리고* 30일 전체 유예 기간 동안 갱신하지 않기로 선택한 경우에만
+true 반환 가능.
+
+### Consequences / 결과
+
+**Benefits / 장점:**
+
+- NFT marketplaces and aggregators can be cleaned up by community
+  members or automated indexers, at the cost of one transaction's
+  gas per stale name. No protocol intervention or holder action
+  needed.
+- Storage is reclaimed (`expiries[id]` and `names[id]` mappings
+  are deleted), giving back gas refunds to the caller and shrinking
+  the contract's effective state size over time.
+- `NameBurned` events provide an explicit signal for off-chain
+  indexers (vs. having to infer burn from "the token disappeared").
+- The implicit-burn-during-register path now emits the same event,
+  giving indexers a single, consistent signal regardless of how
+  the burn was triggered.
+
+**Trade-offs / 감수:**
+
+- One additional external function and one additional event type
+  expand the audit surface, though by very little (~50 lines total).
+- A previously-burned token's `nameExpires(id)` returns 0 (vs.
+  the original expiry value for non-cleaned expired tokens).
+  Both indicate "not active" to downstream code, but the distinction
+  could trip up consumers that special-case "0 means never registered"
+  vs "non-zero past timestamp means expired." Verified that all
+  in-protocol consumers treat both as "not active."
+- A third party who burns and immediately re-registers the same
+  name gains no advantage: they still go through the standard
+  commit-reveal flow with `MIN_COMMITMENT_AGE` enforced. No
+  front-running of legitimate registrants is possible because
+  the commit-reveal binding from ADR-005 prevents parameter
+  swapping.
+
+### Coverage / 검증 범위
+
+The `test/Registrar-Burn.test.ts` suite verifies (7 tests):
+
+- `burn()` reverts with `NotYetBurnable` while the name is still
+  active
+- `burn()` reverts with `NotYetBurnable` during the grace period
+  (expired but still renewable)
+- `burn()` succeeds after `expiry + GRACE_PERIOD` has passed
+- Permissionless: a third party (not the previous holder) can
+  successfully burn a fully-expired token
+- After burn, `expiries[id]` and `names[id]` are both cleared
+  (read as 0 / empty string)
+- The implicit `_burn()` inside `register()` emits exactly one
+  `NameBurned` event during re-registration of an expired name
+- `burn()` on a never-minted tokenId reverts with `TokenOwnerNotFound`
+
+`test/Registrar-Burn.test.ts`가 7개 테스트로 검증: 활성 이름에 대한
+burn 거부, 유예 기간 중 burn 거부, 유예 이후 burn 성공, 권한 불필요
+(제3자) burn 성공, 상태 정리(expiries/names 클리어), 재등록 시
+묵시적 burn의 NameBurned 이벤트 emit, 발행되지 않은 토큰에 대한
+burn 거부.
+
+---
+
+
+
 ## How to add a new ADR / 새 ADR 추가 방법
 
 When making a significant architectural decision:
