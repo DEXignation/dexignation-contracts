@@ -18,6 +18,10 @@
 //     for on-chain SVG `tokenURI` rendering.
 //     `register()`가 원본 `label` 문자열을 인자로 받아 온체인 SVG tokenURI
 //     렌더링에 사용한다.
+//   - Voluntary `burn()` allowed after `expiry + grace` so holders can
+//     surrender stale domains and clear them from NFT marketplaces (ADR-012).
+//     만료+유예 이후 보유자가 자발적으로 `burn()` 호출 가능, NFT 마켓
+//     플레이스에서 stale 항목 정리 (ADR-012).
 //   - Custom errors throughout.
 //     전반에 걸친 커스텀 에러 사용.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -37,6 +41,11 @@ interface IDXRegistrar is IERC721 {
   event ControllerRemoved(address indexed controller);
   event NameRegistered(uint256 indexed id, address indexed owner, uint256 expires);
   event NameRenewed(uint256 indexed id, uint256 expires);
+
+  /// @dev Emitted when an expired token is burned, either by the
+  ///      previous holder voluntarily or implicitly during re-registration.
+  ///      만료 토큰이 소각될 때 (자발적 또는 재등록 중 묵시적).
+  event NameBurned(uint256 indexed id, address indexed burner);
 
   // ── Errors ────────────────────────────────────────────────────────────────
 
@@ -68,6 +77,10 @@ interface IDXRegistrar is IERC721 {
   ///      토큰이 만료됨.
   error TokenExpired(uint256 tokenId);
 
+  /// @dev Burn attempted before `expiry + GRACE_PERIOD`.
+  ///      만료+유예 기간 이전에 burn 시도.
+  error NotYetBurnable(uint256 tokenId, uint256 burnableAt);
+
   // ── Functions ─────────────────────────────────────────────────────────────
 
   function addController(address controller) external;
@@ -91,4 +104,16 @@ interface IDXRegistrar is IERC721 {
   function renew(uint256 id, uint256 duration) external returns (uint256);
 
   function reclaim(uint256 id, address owner) external;
+
+  /// @notice Burn an expired domain NFT after the grace period has passed.
+  ///         만료된 도메인 NFT를 유예 기간 이후 소각.
+  /// @dev    Permissionless: anyone can burn an expired token. This allows
+  ///         NFT marketplaces and aggregators to clean up stale listings
+  ///         without requiring action from the original holder.
+  ///         The label string and expiry are deleted along with the token.
+  ///         권한 불필요: 만료된 토큰은 누구나 burn 가능. NFT 마켓 등이
+  ///         stale 항목을 보유자 행동 없이 정리 가능.
+  ///         라벨 문자열과 expiry도 함께 삭제됨.
+  /// @param  id tokenId (labelhash as uint256)
+  function burn(uint256 id) external;
 }

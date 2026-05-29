@@ -32,6 +32,14 @@
 //   4. `GRACE_PERIOD` set to 30 days (ENS uses 90 days). This is a product
 //      decision aligned with DEXignation's renewal policy.
 //      유예 기간은 30일 (ENS는 90일). 제품 정책에 맞춘 결정.
+//   5. Permissionless `burn()` after `expiry + GRACE_PERIOD`. Anyone may
+//      burn a fully-expired token so NFT marketplaces and indexers can
+//      clear stale listings without requiring action from the previous
+//      holder. The implicit burn inside `register()` also emits
+//      `NameBurned` for consistency (ADR-012).
+//      만료+유예 이후 누구나 호출 가능한 `burn()`. 마켓/인덱서가 보유자
+//      행동 없이 stale 항목 정리 가능. `register()` 내 묵시적 burn도
+//      일관성을 위해 `NameBurned` 이벤트 emit (ADR-012).
 // ─────────────────────────────────────────────────────────────────────────────
 
 pragma solidity ^0.8.28;
@@ -202,14 +210,21 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
       revert InvalidDuration();
     }
 
+    // Burn any previously-owned token before re-minting (grace period passed).
+    // Emit NameBurned for marketplaces/indexers to clear stale listings, then
+    // overwrite names[id] / expiries[id] for the new registration.
+    //   이전에 같은 id로 발행되었다가 만료된 토큰이 있으면 소각한다.
+    //   마켓/인덱서가 stale 항목을 정리할 수 있도록 NameBurned 이벤트를
+    //   emit한 뒤, 새 등록을 위해 names[id] / expiries[id]를 덮어쓴다.
+    address prevOwner = _ownerOf(id);
+    if (prevOwner != address(0)) {
+        _burn(id);
+        emit NameBurned(id, prevOwner);
+    }
+
     expiries[id] = block.timestamp + duration;
     names[id] = label;
 
-    // Burn any previously-owned token before re-minting (grace period passed).
-    //   이전에 같은 id로 발행되었다가 만료된 토큰이 있으면 소각한다.
-    if (_ownerOf(id) != address(0)) {
-        _burn(id);
-    }
     _mint(owner, id);
 
     // Record subnode owner and expiry on the registry. Both calls require
@@ -269,6 +284,49 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     }
 
     registry.setSubnodeOwner(baseNode, bytes32(id), owner);
+  }
+
+  /// @notice Burn an expired domain NFT after the grace period has passed.
+  ///         만료된 도메인 NFT를 유예 기간 이후 소각.
+  /// @dev    Permissionless cleanup function. Anyone (not just the
+  ///         previous holder) may call this to delete the ERC-721 token,
+  ///         label string, and expiry record for a name whose lifetime
+  ///         has fully ended.
+  ///
+  ///         Rationale: NFT marketplaces and aggregators index every
+  ///         minted token. Without explicit burn, expired domains linger
+  ///         as "ghost" listings even after they become re-registerable.
+  ///         A permissionless burn lets community members (or automated
+  ///         indexers) clean up at the cost of one transaction.
+  ///
+  ///         Safety: `available(id)` returns true iff `expiry + grace <
+  ///         block.timestamp`, so this can never burn an active or
+  ///         in-grace token. The previous holder retains full renewal
+  ///         rights during the grace period.
+  ///
+  ///         Side effects: registry subnode owner is NOT cleared here —
+  ///         it remains whatever the registry has, which after expiry
+  ///         is considered "no owner" by `isExpired()` checks in
+  ///         downstream contracts (Resolver, ReverseRegistrar).
+  ///
+  ///         권한 불필요 정리 함수. 만료+유예 종료된 토큰을 누구나 burn
+  ///         가능. NFT 마켓이 stale 항목을 보유자 행동 없이 정리 가능.
+  ///         `available(id)` 검사로 활성/유예 토큰은 burn 불가 보장.
+  /// @param  id tokenId (labelhash as uint256)
+  function burn(uint256 id) external override {
+    address prevOwner = _ownerOf(id);
+    if (prevOwner == address(0)) {
+      revert TokenOwnerNotFound();
+    }
+    if (!available(id)) {
+      revert NotYetBurnable(id, expiries[id] + GRACE_PERIOD + 1);
+    }
+
+    _burn(id);
+    delete expiries[id];
+    delete names[id];
+
+    emit NameBurned(id, prevOwner);
   }
 
   /// @notice ERC-721 `ownerOf` that also reverts when the token is expired.
