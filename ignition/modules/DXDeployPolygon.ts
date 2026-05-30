@@ -27,6 +27,7 @@ const RENT_PRICES = [
   18n * 10n ** 18n,
   25n * 10n ** 18n,
   40n * 10n ** 18n,
+  55n * 10n ** 18n,
 ];
 
 // Production Chainlink feeds on Polygon mainnet.

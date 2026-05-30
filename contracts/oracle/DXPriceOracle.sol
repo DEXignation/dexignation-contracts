@@ -79,6 +79,7 @@ contract DXPriceOracle is IDXPriceOracle, Ownable {
   uint256 public immutable price3Year;
   uint256 public immutable price5Year;
   uint256 public immutable price10Year;
+  uint256 public immutable price15Year;
 
   /// @notice Maximum acceptable staleness for any oracle read.
   ///         오라클 read의 최대 허용 staleness.
@@ -88,6 +89,7 @@ contract DXPriceOracle is IDXPriceOracle, Ownable {
   uint256 internal constant DURATION_3Y = 3 * 365 days;
   uint256 internal constant DURATION_5Y = 5 * 365 days;
   uint256 internal constant DURATION_10Y = 10 * 365 days;
+  uint256 internal constant DURATION_15Y = 15 * 365 days;
 
   // ── Premium decay parameters / Premium 감쇠 파라미터 ────────────────────────
   //
@@ -113,15 +115,16 @@ contract DXPriceOracle is IDXPriceOracle, Ownable {
     uint256 premiumHalfLife
   );
 
-  /// @param _rentPrices Array of 4 attoUSD prices in order: [1y, 3y, 5y, 10y].
-  ///                    1/3/5/10년 attoUSD 가격 배열.
+  /// @param _rentPrices Array of 5 attoUSD prices in order: [1y, 3y, 5y, 10y, 15y].
+  ///                    1/3/5/10/15년 attoUSD 가격 배열.
   constructor(uint256[] memory _rentPrices) Ownable(msg.sender) {
-    if (_rentPrices.length != 4) revert InvalidRentPricesLength();
+    if (_rentPrices.length != 5) revert InvalidRentPricesLength();
 
     price1Year = _rentPrices[0];
     price3Year = _rentPrices[1];
     price5Year = _rentPrices[2];
     price10Year = _rentPrices[3];
+    price15Year = _rentPrices[4];
 
     // Default: premium disabled. Owner enables it via `setPremiumConfig`
     // once a price discovery mechanism (auction / batch sale) is in place.
@@ -291,6 +294,8 @@ contract DXPriceOracle is IDXPriceOracle, Ownable {
       return price5Year;
     } else if (duration == DURATION_10Y) {
       return price10Year;
+    } else if (duration == DURATION_15Y) {
+      return price15Year;
     }
     revert InvalidDuration();
   }

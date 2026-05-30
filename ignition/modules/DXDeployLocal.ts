@@ -27,6 +27,7 @@ const RENT_PRICES = [
   18n * 10n ** 18n,
   25n * 10n ** 18n,
   40n * 10n ** 18n,
+  55n * 10n ** 18n,
 ];
 
 const MOCK_POL_USD = 40_000_000n; // $0.40 with 8 decimals.
