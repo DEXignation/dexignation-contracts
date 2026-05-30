@@ -1,0 +1,57 @@
+{
+  "_format": "hh3-sol-build-info-1",
+  "id": "solc-0_8_28-5278fbdd4db972bb39109344d856acb5765b8c02",
+  "solcVersion": "0.8.28",
+  "solcLongVersion": "0.8.28+commit.7893614a",
+  "compilerType": "solc",
+  "toolVersions": {
+    "hardhat": "3.6.0"
+  },
+  "userSourceNameMap": {
+    "contracts/registrar/DXReservations.sol": "project/contracts/registrar/DXReservations.sol"
+  },
+  "input": {
+    "language": "Solidity",
+    "settings": {
+      "evmVersion": "cancun",
+      "optimizer": {
+        "enabled": true,
+        "runs": 200
+      },
+      "outputSelection": {
+        "*": {
+          "": [
+            "ast"
+          ],
+          "*": [
+            "abi",
+            "evm.bytecode.linkReferences",
+            "evm.bytecode.object",
+            "evm.bytecode.opcodes",
+            "evm.bytecode.sourceMap",
+            "evm.deployedBytecode.immutableReferences",
+            "evm.deployedBytecode.linkReferences",
+            "evm.deployedBytecode.object",
+            "evm.deployedBytecode.opcodes",
+            "evm.deployedBytecode.sourceMap",
+            "evm.methodIdentifiers"
+          ]
+        }
+      },
+      "remappings": [
+        "project/:@openzeppelin/contracts/=npm/@openzeppelin/contracts@5.6.1/"
+      ]
+    },
+    "sources": {
+      "npm/@openzeppelin/contracts@5.6.1/access/Ownable.sol": {
+        "content": "// SPDX-License-Identifier: MIT\n// OpenZeppelin Contracts (last updated v5.0.0) (access/Ownable.sol)\n\npragma solidity ^0.8.20;\n\nimport {Context} from \"../utils/Context.sol\";\n\n/**\n * @dev Contract module which provides a basic access control mechanism, where\n * there is an account (an owner) that can be granted exclusive access to\n * specific functions.\n *\n * The initial owner is set to the address provided by the deployer. This can\n * later be changed with {transferOwnership}.\n *\n * This module is used through inheritance. It will make available the modifier\n * `onlyOwner`, which can be applied to your functions to restrict their use to\n * the owner.\n */\nabstract contract Ownable is Context {\n    address private _owner;\n\n    /**\n     * @dev The caller account is not authorized to perform an operation.\n     */\n    error OwnableUnauthorizedAccount(address account);\n\n    /**\n     * @dev The owner is not a valid owner account. (eg. `address(0)`)\n     */\n    error OwnableInvalidOwner(address owner);\n\n    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);\n\n    /**\n     * @dev Initializes the contract setting the address provided by the deployer as the initial owner.\n     */\n    constructor(address initialOwner) {\n        if (initialOwner == address(0)) {\n            revert OwnableInvalidOwner(address(0));\n        }\n        _transferOwnership(initialOwner);\n    }\n\n    /**\n     * @dev Throws if called by any account other than the owner.\n     */\n    modifier onlyOwner() {\n        _checkOwner();\n        _;\n    }\n\n    /**\n     * @dev Returns the address of the current owner.\n     */\n    function owner() public view virtual returns (address) {\n        return _owner;\n    }\n\n    /**\n     * @dev Throws if the sender is not the owner.\n     */\n    function _checkOwner() internal view virtual {\n        if (owner() != _msgSender()) {\n            revert OwnableUnauthorizedAccount(_msgSender());\n        }\n    }\n\n    /**\n     * @dev Leaves the contract without owner. It will not be possible to call\n     * `onlyOwner` functions. Can only be called by the current owner.\n     *\n     * NOTE: Renouncing ownership will leave the contract without an owner,\n     * thereby disabling any functionality that is only available to the owner.\n     */\n    function renounceOwnership() public virtual onlyOwner {\n        _transferOwnership(address(0));\n    }\n\n    /**\n     * @dev Transfers ownership of the contract to a new account (`newOwner`).\n     * Can only be called by the current owner.\n     */\n    function transferOwnership(address newOwner) public virtual onlyOwner {\n        if (newOwner == address(0)) {\n            revert OwnableInvalidOwner(address(0));\n        }\n        _transferOwnership(newOwner);\n    }\n\n    /**\n     * @dev Transfers ownership of the contract to a new account (`newOwner`).\n     * Internal function without access restriction.\n     */\n    function _transferOwnership(address newOwner) internal virtual {\n        address oldOwner = _owner;\n        _owner = newOwner;\n        emit OwnershipTransferred(oldOwner, newOwner);\n    }\n}\n"
+      },
+      "npm/@openzeppelin/contracts@5.6.1/utils/Context.sol": {
+        "content": "// SPDX-License-Identifier: MIT\n// OpenZeppelin Contracts (last updated v5.0.1) (utils/Context.sol)\n\npragma solidity ^0.8.20;\n\n/**\n * @dev Provides information about the current execution context, including the\n * sender of the transaction and its data. While these are generally available\n * via msg.sender and msg.data, they should not be accessed in such a direct\n * manner, since when dealing with meta-transactions the account sending and\n * paying for execution may not be the actual sender (as far as an application\n * is concerned).\n *\n * This contract is only required for intermediate, library-like contracts.\n */\nabstract contract Context {\n    function _msgSender() internal view virtual returns (address) {\n        return msg.sender;\n    }\n\n    function _msgData() internal view virtual returns (bytes calldata) {\n        return msg.data;\n    }\n\n    function _contextSuffixLength() internal view virtual returns (uint256) {\n        return 0;\n    }\n}\n"
+      },
+      "project/contracts/registrar/DXReservations.sol": {
+        "content": "// SPDX-License-Identifier: MIT\n//\n// ─────────────────────────────────────────────────────────────────────────────\n// DEXignation — DXReservations\n//\n// Reserved-label registry. Tracks which labels are blocked from normal\n// open registration, typically because:\n//   - they correspond to a known brand / trademark held by a third party\n//     (\"samsung\", \"binance\", \"kbbank\") and DEXignation chooses to let the\n//     legitimate holder claim them through a separate verified flow;\n//   - they are protocol-owned premium labels held back for a planned\n//     auction or batch sale;\n//   - they have been flagged for policy reasons (offensive content,\n//     country names with disputed status, etc.).\n//\n// Once an auction or claim flow finalises, the auction contract calls\n// `releaseLabel()` so the label becomes openly registrable.\n//\n// 예약 라벨 레지스트리. 일반 공개 등록에서 차단되는 라벨을 추적한다.\n// 사유 예시:\n//   - 제3자 상표(예: \"samsung\", \"binance\", \"kbbank\") — 합법적 보유자가\n//     별도의 검증 절차로 클레임할 수 있도록 보류\n//   - 프로토콜이 보유한 프리미엄 라벨로 경매·일괄 판매 대기\n//   - 정책상 차단 라벨\n//\n// 경매·클레임 절차가 끝나면 경매 컨트랙트가 `releaseLabel()`을 호출하여\n// 일반 등록을 열어준다.\n// ─────────────────────────────────────────────────────────────────────────────\n\npragma solidity ^0.8.28;\n\nimport {Ownable} from \"@openzeppelin/contracts/access/Ownable.sol\";\n\n/// @title  DXReservations\n/// @notice Append-only-ish registry of reserved labelhashes with an\n///         optional reason code. Each entry can be released exactly once\n///         by the owner or by an authorised auction contract.\n///\n///         예약된 labelhash 레지스트리. 각 엔트리는 owner 또는 권한 부여된\n///         경매 컨트랙트가 한 번만 해제할 수 있다.\ncontract DXReservations is Ownable {\n\n  enum ReservationReason {\n    None,\n    Trademark,        // 1\n    Premium,          // 2\n    Policy,           // 3\n    Custom            // 4\n  }\n\n  struct Reservation {\n    bool reserved;\n    ReservationReason reason;\n    address claimableBy;   // 0 = no specific claimant\n    uint64 createdAt;\n  }\n\n  /// @dev labelhash => reservation entry\n  mapping(bytes32 => Reservation) public reservations;\n\n  /// @dev Auction/claim contracts authorised to call `releaseLabel`.\n  ///      예약 해제 권한을 위임받은 컨트랙트(주로 경매 컨트랙트).\n  mapping(address => bool) public releasers;\n\n  event LabelReserved(\n    bytes32 indexed labelhash,\n    ReservationReason indexed reason,\n    address claimableBy\n  );\n  event LabelReleased(bytes32 indexed labelhash, address indexed releasedBy);\n  event ReleaserSet(address indexed releaser, bool allowed);\n\n  error AlreadyReserved(bytes32 labelhash);\n  error NotReserved(bytes32 labelhash);\n  error NotAuthorised();\n\n  constructor() Ownable(msg.sender) {}\n\n  /// @notice Mark a label as reserved. Owner-only.\n  ///         라벨을 예약 상태로 표시. 오너 전용.\n  function reserveLabel(\n    string calldata label,\n    ReservationReason reason,\n    address claimableBy\n  ) external onlyOwner {\n    bytes32 lh = keccak256(bytes(label));\n    if (reservations[lh].reserved) revert AlreadyReserved(lh);\n    reservations[lh] = Reservation({\n      reserved: true,\n      reason: reason,\n      claimableBy: claimableBy,\n      createdAt: uint64(block.timestamp)\n    });\n    emit LabelReserved(lh, reason, claimableBy);\n  }\n\n  /// @notice Bulk reservation for efficient setup.\n  ///         초기 셋업 효율을 위한 일괄 예약.\n  function reserveLabels(\n    string[] calldata labels,\n    ReservationReason reason\n  ) external onlyOwner {\n    uint256 len = labels.length;\n    for (uint256 i = 0; i < len; i++) {\n      bytes32 lh = keccak256(bytes(labels[i]));\n      if (reservations[lh].reserved) revert AlreadyReserved(lh);\n      reservations[lh] = Reservation({\n        reserved: true,\n        reason: reason,\n        claimableBy: address(0),\n        createdAt: uint64(block.timestamp)\n      });\n      emit LabelReserved(lh, reason, address(0));\n    }\n  }\n\n  /// @notice Release a previously reserved label. Owner or authorised\n  ///         releaser only.\n  ///         예약을 해제. 오너 또는 권한 받은 releaser만 호출 가능.\n  function releaseLabel(string calldata label) external {\n    if (msg.sender != owner() && !releasers[msg.sender]) revert NotAuthorised();\n    bytes32 lh = keccak256(bytes(label));\n    if (!reservations[lh].reserved) revert NotReserved(lh);\n    delete reservations[lh];\n    emit LabelReleased(lh, msg.sender);\n  }\n\n  /// @notice Authorise / revoke a releaser (typically an auction contract).\n  ///         경매 등 외부 컨트랙트의 해제 권한 부여/회수.\n  function setReleaser(address releaser, bool allowed) external onlyOwner {\n    releasers[releaser] = allowed;\n    emit ReleaserSet(releaser, allowed);\n  }\n\n  // ── View helpers / 조회 헬퍼 ────────────────────────────────────────────────\n\n  /// @notice True if the label is currently reserved.\n  ///         라벨이 현재 예약 상태이면 true.\n  function isReserved(string calldata label) external view returns (bool) {\n    return reservations[keccak256(bytes(label))].reserved;\n  }\n\n  /// @notice True if the label is reserved AND `claimant` is the address\n  ///         allowed to claim it (e.g. via auction or trademark proof).\n  ///         라벨이 예약 상태이고 `claimant`가 클레임 자격자이면 true.\n  function isClaimableBy(string calldata label, address claimant)\n    external\n    view\n    returns (bool)\n  {\n    Reservation memory r = reservations[keccak256(bytes(label))];\n    return r.reserved && r.claimableBy != address(0) && r.claimableBy == claimant;\n  }\n}\n"
+      }
+    }
+  }
+}

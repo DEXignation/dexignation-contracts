@@ -29,7 +29,7 @@
     "verify:amoy": "hardhat verify --network amoy",
     "verify:polygon": "hardhat verify --network polygon",
     "node": "hardhat node",
-    "size": "hardhat size-contracts"
+    "size": "node scripts/check-bytecode-size.mjs"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.1.0"

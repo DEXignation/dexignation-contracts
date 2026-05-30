@@ -29,10 +29,12 @@
 //      위해 보관한다.
 //   3. Custom errors replace `require()` calls.
 //      가스 효율을 위해 `require` 대신 커스텀 에러를 사용.
-//   4. `GRACE_PERIOD` set to 30 days (ENS uses 90 days). This is a product
-//      decision aligned with DEXignation's renewal policy.
-//      유예 기간은 30일 (ENS는 90일). 제품 정책에 맞춘 결정.
-//   5. Permissionless `burn()` after `expiry + GRACE_PERIOD`. Anyone may
+//   4. `gracePeriod` set to 70 days (ENS uses 90 days). This is a product
+//      decision aligned with DEXignation's renewal policy. Owner can adjust
+//      via `setGracePeriod()` if needed.
+//      유예 기간은 70일 (ENS는 90일). 제품 정책에 맞춘 결정. 필요시 owner가
+//      `setGracePeriod()`로 조정 가능.
+//   5. Permissionless `burn()` after `expiry + gracePeriod`. Anyone may
 //      burn a fully-expired token so NFT marketplaces and indexers can
 //      clear stale listings without requiring action from the previous
 //      holder. The implicit burn inside `register()` also emits
@@ -87,8 +89,10 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
   mapping(address => bool) public controllers;
 
   /// @notice Grace period after expiry during which renewal is still allowed.
-  ///         만료 후에도 갱신을 허용하는 유예 기간.
-  uint256 public constant GRACE_PERIOD = 30 days;
+  ///         Owner can adjust this value if needed (7 days ~ 365 days).
+  ///         만료 후에도 갱신을 허용하는 유예 기간: 초기값 70일.
+  ///         필요시 owner가 `setGracePeriod()`로 7일~365일 범위에서 조정 가능.
+  uint256 public gracePeriod = 70 days;
 
   /// @notice Initial royalty: 2.5% (250 / 10_000). Owner can update via
   ///         `setRoyaltyInfo`. Capped at 10% in the setter to prevent
@@ -99,6 +103,9 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
   uint96 public constant MAX_ROYALTY_BPS = 1000; // 10%
 
   error RoyaltyTooHigh(uint96 requested, uint96 max);
+  error GracePeriodOutOfRange(uint256 requested, uint256 min, uint256 max);
+
+  event GracePeriodUpdated(uint256 indexed newGracePeriod);
 
   constructor(IDXRegistry _registry, bytes32 _baseNode, string memory _baseNodeName)
     ERC721("DEXignation", "DEX")
@@ -130,6 +137,22 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
       revert RoyaltyTooHigh(feeNumerator, MAX_ROYALTY_BPS);
     }
     _setDefaultRoyalty(receiver, feeNumerator);
+  }
+
+  /// @notice Update the grace period (renewal window after expiry).
+  ///         Owner-only. Must be between 7 days and 365 days.
+  ///         유예 기간 조정. 오너 전용. 7일~365일 범위만 허용.
+  /// @param _newGracePeriod   New grace period in seconds.
+  function setGracePeriod(uint256 _newGracePeriod) external onlyOwner {
+    uint256 minGrace = 7 days;
+    uint256 maxGrace = 365 days;
+    
+    if (_newGracePeriod < minGrace || _newGracePeriod > maxGrace) {
+      revert GracePeriodOutOfRange(_newGracePeriod, minGrace, maxGrace);
+    }
+    
+    gracePeriod = _newGracePeriod;
+    emit GracePeriodUpdated(_newGracePeriod);
   }
 
   /// @dev Reverts unless this contract currently owns the TLD node in the
@@ -175,7 +198,7 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
 
   /// @inheritdoc IDXRegistrar
   function available(uint256 id) public view override returns (bool) {
-    return expiries[id] + GRACE_PERIOD < block.timestamp;
+    return expiries[id] + gracePeriod < block.timestamp;
   }
 
   /// @notice Register a name. Only callable by a whitelisted controller.
@@ -206,7 +229,7 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     // 오버플로우할 정도로 크면 거부한다. Solidity 0.8이 자동 revert지만
     // 의미 있는 에러로 바꿔준다.
     if (duration == 0) revert InvalidDuration();
-    if (duration > type(uint256).max - block.timestamp - GRACE_PERIOD) {
+    if (duration > type(uint256).max - block.timestamp - gracePeriod) {
       revert InvalidDuration();
     }
 
@@ -249,7 +272,7 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
   ) external override whenOwnsBaseNode onlyController returns (uint256) {
     // Must still be within (expiry + grace) to renew.
     //   유예 기간 이내여야 갱신 가능.
-    if (expiries[id] + GRACE_PERIOD < block.timestamp) {
+    if (expiries[id] + gracePeriod < block.timestamp) {
       revert NameNotAvailable(id);
     }
 
@@ -319,7 +342,7 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
       revert TokenOwnerNotFound();
     }
     if (!available(id)) {
-      revert NotYetBurnable(id, expiries[id] + GRACE_PERIOD + 1);
+      revert NotYetBurnable(id, expiries[id] + gracePeriod + 1);
     }
 
     _burn(id);

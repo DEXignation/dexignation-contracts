@@ -16,6 +16,11 @@ function tldNamehash(label: string): `0x${string}` {
 const TLD = "dex";
 const TLD_NODE = tldNamehash(TLD);
 const TLD_LABEL_HASH = keccak256(toBytes(TLD));
+const REVERSE_LABEL_HASH = keccak256(toBytes("reverse"));
+const REVERSE_NODE = keccak256(
+  encodePacked(["bytes32", "bytes32"], [zeroHash, REVERSE_LABEL_HASH]),
+);
+const ADDR_LABEL_HASH = keccak256(toBytes("addr"));
 
 const RENT_PRICES = [
   8n * 10n ** 18n,
@@ -48,6 +53,12 @@ export default buildModule("DXDeployLocal", (m) => {
   // ── Wiring ────────────────────────────────────────────────────────────────
   m.call(registry, "setSubnodeOwner", [zeroHash, TLD_LABEL_HASH, registrar], {
     id: "GrantTldToRegistrar",
+  });
+  m.call(registry, "setSubnodeOwner", [zeroHash, REVERSE_LABEL_HASH, m.getAccount(0)], {
+    id: "CreateReverseNode",
+  });
+  m.call(registry, "setSubnodeOwner", [REVERSE_NODE, ADDR_LABEL_HASH, reverseRegistrar], {
+    id: "GrantAddrReverseToReverseRegistrar",
   });
   m.call(registrar, "addController", [controller], { id: "AddController" });
   m.call(priceOracle, "setPolUsdOracle", [mockPolUsd], { id: "SetPolUsdOracle" });
