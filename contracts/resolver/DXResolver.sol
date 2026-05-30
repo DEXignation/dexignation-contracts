@@ -80,6 +80,30 @@ contract DXResolver is Ownable {
   // owner => (operator => approved)
   mapping(address => mapping(address => bool)) private _operatorApprovals;
 
+  // ── Agent identity & payment routing (v1.3, B1) ────────────────────────
+  // A `.dex` name can POINT TO an external agent identity (e.g. ERC-8004) and
+  // a payment endpoint (e.g. x402). This resolver does NOT implement those
+  // standards — it stores pointers to them, exactly as ENS stores addr/
+  // contenthash pointers. The agent "card" (capabilities, MCP/A2A/HTTP
+  // endpoints, spend policy) lives off-chain at `cardURI`; only the trust-
+  // anchoring pointers are kept on-chain.
+  //   `.dex` 이름이 외부 에이전트 신원(예: ERC-8004)과 결제 엔드포인트(예:
+  //   x402)를 가리킬 수 있다. 이 리졸버는 그 표준들을 구현하지 않고 포인터만
+  //   저장한다 — ENS가 addr/contenthash 포인터를 저장하는 것과 동일. 에이전트
+  //   "카드"(기능·엔드포인트·지출정책)는 오프체인 `cardURI`에 있고, 온체인에는
+  //   신뢰 기준점 포인터만 둔다.
+  struct AgentRecord {
+    address registry;   // external agent registry (e.g. ERC-8004 Identity Registry)
+    uint256 agentId;    // agent id within that registry (e.g. ERC-721 tokenId)
+    string  cardURI;    // off-chain agent card (MCP/A2A/HTTP endpoints, policy)
+    address payTo;      // payment recipient (x402 settlement address)
+    address payToken;   // preferred token (e.g. USDC); address(0) = native
+  }
+
+  /// @notice Per-node agent identity + payment-routing record.
+  ///         노드별 에이전트 신원 + 결제 라우팅 레코드.
+  mapping(bytes32 => AgentRecord) private agentRecords;
+
   // ── Custom errors ──────────────────────────────────────────────────────
   error ContenthashTooLong(uint256 length, uint256 maxLength);
   error TextKeyTooLong(uint256 length, uint256 maxLength);
@@ -420,6 +444,100 @@ contract DXResolver is Ownable {
       }
     }
     return textRecords[node][key];
+  }
+  
+  // ════════════════════════════════════════════════════════════════════════
+  // AGENT IDENTITY & PAYMENT ROUTING (v1.3, B1)
+  //   Point a `.dex` name at an external agent identity (ERC-8004) and a
+  //   payment endpoint (x402). Pointers only — standards are not implemented
+  //   here. 외부 에이전트 신원(ERC-8004)·결제 엔드포인트(x402)를 가리키는
+  //   포인터만 저장. 표준 자체는 구현하지 않음.
+  // ════════════════════════════════════════════════════════════════════════
+
+  event AgentRecordChanged(
+    bytes32 indexed node,
+    address indexed registry,
+    uint256 agentId,
+    address payTo
+  );
+  event AgentRecordCleared(bytes32 indexed node);
+
+  /// @notice Set the agent identity + payment-routing record for `node`.
+  ///         Owner/operator only.
+  ///         `node`의 에이전트 신원 + 결제 라우팅 레코드 설정. 소유자/operator만.
+  /// @param node     Domain node hash / 도메인 노드 해시
+  /// @param registry_ External agent registry, e.g. ERC-8004 Identity Registry
+  /// @param agentId  Agent id within that registry (e.g. ERC-721 tokenId)
+  /// @param cardURI  Off-chain agent card URI (endpoints, capabilities, policy)
+  /// @param payTo    Payment recipient (x402 settlement); may differ from owner
+  /// @param payToken Preferred payment token; address(0) = native currency
+  function setAgent(
+    bytes32 node,
+    address registry_,
+    uint256 agentId,
+    string calldata cardURI,
+    address payTo,
+    address payToken
+  ) external onlyTokenOwner(node) {
+    agentRecords[node] = AgentRecord({
+      registry: registry_,
+      agentId: agentId,
+      cardURI: cardURI,
+      payTo: payTo,
+      payToken: payToken
+    });
+    emit AgentRecordChanged(node, registry_, agentId, payTo);
+  }
+
+  /// @notice Remove the agent record for `node`. Owner/operator only.
+  ///         `node`의 에이전트 레코드 삭제. 소유자/operator만.
+  function clearAgent(bytes32 node) external onlyTokenOwner(node) {
+    delete agentRecords[node];
+    emit AgentRecordCleared(node);
+  }
+
+  /// @notice Read the full agent record. Returns zero/empty values for an
+  ///         expired node or when unset.
+  ///         전체 에이전트 레코드 조회. 만료 노드나 미설정 시 공백/0 반환.
+  function getAgent(bytes32 node)
+    external
+    view
+    returns (
+      address registry_,
+      uint256 agentId,
+      string memory cardURI,
+      address payTo,
+      address payToken
+    )
+  {
+    if (registry.isExpired(node)) {
+      return (address(0), 0, "", address(0), address(0));
+    }
+    AgentRecord storage a = agentRecords[node];
+    return (a.registry, a.agentId, a.cardURI, a.payTo, a.payToken);
+  }
+
+  /// @notice Convenience: just the payment routing (payTo, payToken). Returns
+  ///         zeros for an expired node. Useful for x402 settlement lookups.
+  ///         편의: 결제 라우팅만(payTo, payToken). 만료 시 0. x402 정산 조회용.
+  function agentPayment(bytes32 node)
+    external
+    view
+    returns (address payTo, address payToken)
+  {
+    if (registry.isExpired(node)) {
+      return (address(0), address(0));
+    }
+    AgentRecord storage a = agentRecords[node];
+    return (a.payTo, a.payToken);
+  }
+
+  /// @notice True if `node` has an agent identity configured (non-zero
+  ///         registry) and is not expired.
+  ///         `node`에 에이전트 신원(비-0 registry)이 설정되고 미만료면 true.
+  function hasAgent(bytes32 node) external view returns (bool) {
+    if (registry.isExpired(node)) return false;
+    return agentRecords[node].registry != address(0);
   }
   
   // ════════════════════════════════════════════════════════════════════════
