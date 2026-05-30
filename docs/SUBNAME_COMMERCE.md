@@ -1,6 +1,6 @@
 # Subname Commerce (`DXSubnameRegistrar`)
 
-> A standalone module that lets any parent-name owner run their own subname business — set a price, enable sales, and earn revenue when buyers register subnames under their name (e.g. `team.alice.dex`). Built without touching the core registry, controller, or resolver.
+> A standalone module that lets any parent-name owner run their own subname business — set a price, enable sales, optionally gate access to token/badge holders, and earn revenue when buyers register subnames under their name (e.g. `team.alice.dex`). Built without touching the core registry, controller, or resolver.
 
 ---
 
@@ -139,6 +139,36 @@ ownerProceeds = price - protocolFee
 
 ---
 
+## Access gating (optional)
+
+A parent owner can require buyers to hold a token or badge before they may register a subname — useful for community-only or members-only subname spaces. The gate is opt-in per parent and off by default.
+
+```solidity
+function setSubnameGate(
+  bytes32 parentNode,
+  address token,      // ERC-20 or ERC-721/SBT; address(0) removes the gate
+  uint256 threshold   // ERC-20: token amount. SBT/ERC-721: badge count (use 1)
+) external;            // only the parent owner
+
+function meetsGate(bytes32 parentNode, address buyer) external view returns (bool);
+```
+
+One interface covers both token types: ERC-20 and ERC-721/SBT both expose `balanceOf(address) returns (uint256)`, so the gate simply checks `balanceOf(buyer) >= threshold`. For an ERC-20 the threshold is an amount; for an SBT it is a badge count (typically `1`). When no gate is set, anyone may buy.
+
+At purchase time, if the buyer holds less than the threshold, `registerSubname` reverts with `GateNotMet(parentNode, gateToken, required, held)`. For UIs, pair `isPurchasable(parentNode)` (parent-level preconditions) with `meetsGate(parentNode, buyer)` (buyer-level eligibility) — a buyer can register iff both are true.
+
+<details><summary>▶ 한국어로 보기</summary>
+
+부모 소유자는 구매자에게 토큰/배지 보유를 요구할 수 있습니다 — 커뮤니티·멤버 전용 서브네임 공간에 유용. 부모별 opt-in이며 기본은 꺼짐.
+
+한 인터페이스로 두 토큰 타입 처리: ERC-20과 ERC-721/SBT가 모두 `balanceOf(address)`를 노출하므로 게이트는 `balanceOf(buyer) >= threshold`만 확인. ERC-20은 임계치가 수량, SBT는 배지 개수(보통 `1`). 게이트 미설정 시 누구나 구매.
+
+구매 시 구매자 보유량이 임계치 미만이면 `registerSubname`이 `GateNotMet(parentNode, gateToken, required, held)`로 revert. UI에선 `isPurchasable`(부모 단위 전제)과 `meetsGate`(구매자 단위 자격)를 함께 확인 — 둘 다 true면 등록 가능.
+
+</details>
+
+---
+
 ## Safety properties
 
 - **Operator-delegation guard** — if the parent owner has not called `setApprovalForAll`, a purchase reverts with `ModuleNotApproved(parentNode, parentOwner)` rather than an opaque inner failure.
@@ -200,12 +230,19 @@ DXSubnameRegistrar — subname commerce (A3)        8 passing
   ✔ isPurchasable reflects the full precondition set
   ✔ buys a subname end-to-end and registers it to the buyer
   ✔ splits revenue between fee recipient and parent owner
+
+DXSubnameRegistrar — access gating (A3 ext)        5 passing
+  ✔ only the parent owner can set the gate
+  ✔ ERC-20 gate: holder can buy, non-holder reverts
+  ✔ SBT gate: badge holder can buy, non-holder reverts
+  ✔ clearing the gate (zero address) re-opens to everyone
+  ✔ meetsGate view reflects eligibility
 ```
 
-Exercised against the real registry (not mocks), so the operator-delegation flow and revenue split are verified in full. Total suite: **112 passing.**
+Exercised against the real registry (not mocks), so the operator-delegation flow, revenue split, and both gate types are verified in full. Total suite: **117 passing.**
 
 <details><summary>▶ 한국어로 보기</summary>
 
-8개 테스트가 (목이 아닌) 실제 registry 대상으로 operator 위임 흐름과 수익 분배를 전부 검증. 전체 **112 통과.**
+13개 테스트가 (목이 아닌) 실제 registry 대상으로 operator 위임 흐름·수익 분배·두 게이트 타입을 전부 검증. 전체 **117 통과.**
 
 </details>
