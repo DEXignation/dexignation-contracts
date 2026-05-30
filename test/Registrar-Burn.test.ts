@@ -43,7 +43,7 @@ async function expectRevert(
 
 const ONE_YEAR = 365n * 24n * 60n * 60n;
 const MIN_COMMITMENT_AGE = 30n;
-const GRACE_PERIOD = 30n * 24n * 60n * 60n; // 30 days
+const GRACE_PERIOD = 70n * 24n * 60n * 60n; // 70 days (matches DXRegistrar product decision)
 
 function labelHash(label: string): `0x${string}` {
   return keccak256(toBytes(label));

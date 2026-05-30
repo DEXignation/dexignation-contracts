@@ -47,6 +47,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 
 import {IDXRegistrarController} from "./IDXRegistrarController.sol";
 import {IDXPriceOracle} from "../oracle/IDXPriceOracle.sol";
@@ -66,7 +67,7 @@ import "../utils/EVMCoinUtils.sol";
 ///         이름 등록/갱신의 사용자 진입점. 프론트러닝 방지를 위한 commit-reveal,
 ///         네이티브(POL) 및 ERC-20(USDT/USDC) 결제, 등록 시 초기 리졸버 주소
 ///         레코드를 원자적으로 함께 설정해 즉시 사용 가능하게 한다.
-contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGuard {
+contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGuard, Pausable {
   using StringUtils for string;
   using SafeERC20 for IERC20;
 
@@ -80,7 +81,6 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
 
   /// @dev Initial resolver record is written for Polygon's coin type.
   ///      등록 시 Polygon 코인 타입으로 초기 리졸버 주소를 기록.
-  ///      COIN_TYPE_DEFAULT(0x80000000)는 EVMCoinUtils.sol에서 제공.
   uint256 constant CHAIN_ID_POLYGON = 137;
   uint256 constant COIN_TYPE_POLYGON = COIN_TYPE_DEFAULT | CHAIN_ID_POLYGON;
 
@@ -473,7 +473,7 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     uint256 duration,
     address resolver,
     bytes32 secret
-  ) external payable override nonReentrant {
+  ) external payable override nonReentrant whenNotPaused {
     // address(0) = native-currency payment in the commitment binding.
     //   commitment binding에서 네이티브 결제는 address(0).
     _consumeCommitmentFull(label, owner, duration, resolver, address(0), secret);
@@ -507,7 +507,7 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   function renew(
     string calldata label,
     uint256 duration
-  ) external payable override nonReentrant {
+  ) external payable override nonReentrant whenNotPaused {
     bytes32 labelhash = keccak256(bytes(label));
     // Renewal does not trigger premium decay (the name is still owned),
     // but we still apply the MOL holder discount.
@@ -541,7 +541,7 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     address resolver,
     address paymentToken,
     bytes32 secret
-  ) external override nonReentrant {
+  ) external override nonReentrant whenNotPaused {
     _consumeCommitmentFull(label, owner, duration, resolver, paymentToken, secret);
     _checkReservation(label, msg.sender);
 
@@ -568,7 +568,7 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     string calldata label,
     uint256 duration,
     address paymentToken
-  ) external override nonReentrant {
+  ) external override nonReentrant whenNotPaused {
     bytes32 labelhash = keccak256(bytes(label));
     // Apply holder discount to the attoUSD price before converting to token.
     //   attoUSD 가격에 보유자 할인 적용 후 토큰 단위로 변환.
@@ -682,6 +682,20 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     bool allowed
   ) external override onlyOwner {
     allowedPaymentTokens[token] = allowed;
+  }
+
+  /// @notice Emergency stop. Halts register/renew (native and token) while
+  ///         paused. Owner-only. Does not affect commit() or view functions.
+  ///         긴급 정지. 정지 중 register/renew(네이티브·토큰) 차단. 오너 전용.
+  ///         commit() 및 view 함수는 영향 없음.
+  function pause() external onlyOwner {
+    _pause();
+  }
+
+  /// @notice Resume normal operation after a pause. Owner-only.
+  ///         정지 해제 후 정상 운영 재개. 오너 전용.
+  function unpause() external onlyOwner {
+    _unpause();
   }
 
   /// @inheritdoc IDXRegistrarController
