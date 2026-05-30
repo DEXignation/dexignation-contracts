@@ -20,9 +20,11 @@ pragma solidity ^0.8.28;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
+import {EVMCoinUtils, COIN_TYPE_DEFAULT, COIN_TYPE_ETH} from "../utils/EVMCoinUtils.sol";
 
 interface IDXRegistry {
   function owner(bytes32 node) external view returns (address);
+  function isExpired(bytes32 node) external view returns (bool);
 }
 
 /// @title DXResolver v1.1
@@ -63,9 +65,25 @@ contract DXResolver is Ownable {
   // v1.1: Language support flag
   mapping(string => bool) public supportedLanguages;
   
-  // v1.1: Supported coin types (SLIP-44 표준)
-  // coinType => (name, isSupported)
+  // v1.1: Supported coin types (SLIP-44 + ENSIP-11)
+  // coinType => name. EVM 체인은 ENSIP-11(0x80000000 | chainId), non-EVM은 SLIP-44.
   mapping(uint256 => string) public supportedCoins;
+
+  using EVMCoinUtils for uint256;
+
+  // ── Record length limits (EIP-1577 / EIP-634) ──────────────────────────
+  uint256 public constant MAX_CONTENTHASH_LENGTH = 128;
+  uint256 public constant MAX_TEXT_KEY_LENGTH = 64;
+  uint256 public constant MAX_TEXT_VALUE_LENGTH = 1024;
+
+  // ── Operator approval (ENS-style) ──────────────────────────────────────
+  // owner => (operator => approved)
+  mapping(address => mapping(address => bool)) private _operatorApprovals;
+
+  // ── Custom errors ──────────────────────────────────────────────────────
+  error ContenthashTooLong(uint256 length, uint256 maxLength);
+  error TextKeyTooLong(uint256 length, uint256 maxLength);
+  error TextValueTooLong(uint256 length, uint256 maxLength);
   
   // ════════════════════════════════════════════════════════════════════════
   // EVENTS
@@ -90,14 +108,36 @@ contract DXResolver is Ownable {
     bytes data
   );
   event LanguageSupportAdded(string langCode);
+  event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
   
   // ════════════════════════════════════════════════════════════════════════
   // MODIFIERS
   // ════════════════════════════════════════════════════════════════════════
   
   modifier onlyTokenOwner(bytes32 node) {
-    require(registry.owner(node) == msg.sender, "Not authorized");
+    address nodeOwner = registry.owner(node);
+    require(
+      nodeOwner == msg.sender || _operatorApprovals[nodeOwner][msg.sender],
+      "Not authorized"
+    );
     _;
+  }
+
+  /// @notice Approve or revoke `operator` to manage all of caller's records.
+  ///         호출자의 모든 레코드를 관리할 operator를 승인/취소한다.
+  function setApprovalForAll(address operator, bool approved) external {
+    require(operator != msg.sender, "Cannot approve self");
+    _operatorApprovals[msg.sender][operator] = approved;
+    emit ApprovalForAll(msg.sender, operator, approved);
+  }
+
+  /// @notice Query if `operator` is approved to manage `owner`'s records.
+  function isApprovedForAll(address ownerAddr, address operator)
+    external
+    view
+    returns (bool)
+  {
+    return _operatorApprovals[ownerAddr][operator];
   }
   
   // ════════════════════════════════════════════════════════════════════════
@@ -131,17 +171,20 @@ contract DXResolver is Ownable {
   }
   
   function _initializeSupportedCoins() internal {
-    // EVM Chains (모두 동일한 주소 포맷: 0x + 20바이트)
-    supportedCoins[60] = "Ethereum";      // SLIP-44: 60
-    supportedCoins[137] = "Polygon";      // SLIP-44: 137
-    supportedCoins[42161] = "Arbitrum";   // SLIP-44: 42161
-    supportedCoins[10] = "Optimism";      // SLIP-44: 10
-    supportedCoins[8453] = "Base";        // SLIP-44: 8453
-    supportedCoins[43114] = "Avalanche";  // SLIP-44: 43114
-    supportedCoins[250] = "Fantom";       // SLIP-44: 250
-    supportedCoins[56] = "BSC";           // SLIP-44: 56
-    
-    // Non-EVM Chains
+    // ── EVM Chains: ENSIP-11 coinType = 0x80000000 | chainId ──────────────
+    //    (주의) chainId는 SLIP-44 코인타입과 다르다. 예: Ethereum chainId=1.
+    supportedCoins[COIN_TYPE_DEFAULT]            = "EVM (default)"; // chainId 0
+    supportedCoins[COIN_TYPE_ETH]                = "Ethereum";      // SLIP-44 60 (legacy 호환)
+    supportedCoins[COIN_TYPE_DEFAULT | 1]        = "Ethereum";      // chainId 1
+    supportedCoins[COIN_TYPE_DEFAULT | 137]      = "Polygon";       // chainId 137
+    supportedCoins[COIN_TYPE_DEFAULT | 42161]    = "Arbitrum";      // chainId 42161
+    supportedCoins[COIN_TYPE_DEFAULT | 10]       = "Optimism";      // chainId 10
+    supportedCoins[COIN_TYPE_DEFAULT | 8453]     = "Base";          // chainId 8453
+    supportedCoins[COIN_TYPE_DEFAULT | 43114]    = "Avalanche";     // chainId 43114
+    supportedCoins[COIN_TYPE_DEFAULT | 250]      = "Fantom";        // chainId 250
+    supportedCoins[COIN_TYPE_DEFAULT | 56]       = "BSC";           // chainId 56
+
+    // ── Non-EVM Chains: SLIP-44 평문 coinType ─────────────────────────────
     supportedCoins[0] = "Bitcoin";        // SLIP-44: 0
     supportedCoins[3] = "Dogecoin";       // SLIP-44: 3
     supportedCoins[2] = "Litecoin";       // SLIP-44: 2
@@ -161,16 +204,25 @@ contract DXResolver is Ownable {
     external
     onlyTokenOwner(node)
   {
+    if (bytes(key).length > MAX_TEXT_KEY_LENGTH) {
+      revert TextKeyTooLong(bytes(key).length, MAX_TEXT_KEY_LENGTH);
+    }
+    if (bytes(value).length > MAX_TEXT_VALUE_LENGTH) {
+      revert TextValueTooLong(bytes(value).length, MAX_TEXT_VALUE_LENGTH);
+    }
     textRecords[node][key] = value;
     emit TextChanged(node, key, value);
   }
   
-  /// @notice Get text record (v1.0 호환성)
+  /// @notice Get text record (v1.0 호환성). 만료된 노드는 빈 문자열 반환.
   function text(bytes32 node, string calldata key)
     external
     view
     returns (string memory)
   {
+    if (registry.isExpired(node)) {
+      return "";
+    }
     return textRecords[node][key];
   }
   
@@ -179,16 +231,22 @@ contract DXResolver is Ownable {
     external
     onlyTokenOwner(node)
   {
+    if (hash.length > MAX_CONTENTHASH_LENGTH) {
+      revert ContenthashTooLong(hash.length, MAX_CONTENTHASH_LENGTH);
+    }
     contenthashes[node] = hash;
     emit ContenthashChanged(node, hash);
   }
   
-  /// @notice Get contenthash (v1.0 호환성)
+  /// @notice Get contenthash (v1.0 호환성). 만료된 노드는 빈 bytes 반환.
   function contenthash(bytes32 node)
     external
     view
     returns (bytes memory)
   {
+    if (registry.isExpired(node)) {
+      return "";
+    }
     return contenthashes[node];
   }
   
@@ -332,10 +390,9 @@ contract DXResolver is Ownable {
   
   /// @notice Validate address format for coin type
   function _validateAddress(uint256 coinType, bytes calldata addrBytes) internal pure {
-    // EVM addresses: 20 bytes (0x... format)
-    if (coinType == 60 || coinType == 137 || coinType == 42161 || 
-        coinType == 10 || coinType == 8453 || coinType == 43114 ||
-        coinType == 250 || coinType == 56) {
+    // EVM addresses (ENSIP-11 + SLIP-44 ETH): single 20-byte format.
+    // EVMCoinUtils가 0x80000000 비트와 SLIP-44 60(ETH)을 모두 EVM으로 인정.
+    if (EVMCoinUtils.isEVMCoinType(coinType)) {
       require(addrBytes.length == 20, "EVM address must be 20 bytes");
       return;
     }

@@ -80,6 +80,7 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
 
   /// @dev Initial resolver record is written for Polygon's coin type.
   ///      등록 시 Polygon 코인 타입으로 초기 리졸버 주소를 기록.
+  ///      COIN_TYPE_DEFAULT(0x80000000)는 EVMCoinUtils.sol에서 제공.
   uint256 constant CHAIN_ID_POLYGON = 137;
   uint256 constant COIN_TYPE_POLYGON = COIN_TYPE_DEFAULT | CHAIN_ID_POLYGON;
 
