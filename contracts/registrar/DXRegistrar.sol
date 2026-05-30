@@ -84,6 +84,19 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
   ///      tokenId에 대응하는 원본 label 문자열. tokenURI 렌더링용.
   mapping(uint256 => string) names;
 
+  /// @dev tokenId => highest tier ever reached (0=charcoal..4=gold). The card
+  ///      color is a "best ever" badge: it ratchets UP when a registration or
+  ///      renewal extends the total guaranteed duration into a higher tier, and
+  ///      never ratchets down as time passes. (An expired name still shows red,
+  ///      handled separately in tokenURI.) This makes the color a durable status
+  ///      symbol — buying 15 years earns gold permanently, and 3y+3y renewals
+  ///      climb from mud to yellow.
+  ///      tokenId => 역대 최고 등급(0=charcoal..4=gold). 카드 색은 "역대 최고"
+  ///      배지: 등록·갱신으로 총 보장 기간이 더 높은 등급에 도달하면 올라가고,
+  ///      시간이 지나도 내려가지 않는다. (만료된 이름은 tokenURI에서 별도로 red.)
+  ///      15년 구매 = 영구 골드, 3년+3년 갱신 = mud→yellow 상승.
+  mapping(uint256 => uint8) public highestTier;
+
   /// @dev Whitelisted controller contracts (e.g. `DXRegistrarController`).
   ///      도메인 등록·갱신을 위임받은 컨트롤러 화이트리스트.
   mapping(address => bool) public controllers;
@@ -248,6 +261,12 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     expiries[id] = block.timestamp + duration;
     names[id] = label;
 
+    // Set the card tier from the purchased duration. A fresh registration
+    // overwrites any stale tier from a previously-expired/burned id.
+    //   구매 기간으로 카드 등급 설정. 신규 등록은 이전(만료/소각) id의 잔여
+    //   등급을 덮어쓴다.
+    highestTier[id] = _tierOf(duration);
+
     _mint(owner, id);
 
     // Record subnode owner and expiry on the registry. Both calls require
@@ -286,6 +305,17 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     }
 
     expiries[id] += duration;
+
+    // Ratchet the card tier UP based on the new total guaranteed duration from
+    // now until the (extended) expiry. Renewing 3y then 3y climbs mud→yellow.
+    // Never ratchets down: the tier only increases.
+    //   현재부터 (연장된) 만료까지의 총 보장 기간 기준으로 카드 등급을 상승.
+    //   3년+3년 갱신은 mud→yellow로 오름. 절대 내려가지 않음.
+    uint8 newTier = _tierOf(expiries[id] - block.timestamp);
+    if (newTier > highestTier[id]) {
+      highestTier[id] = newTier;
+    }
+
     registry.setSubnodeExpires(baseNode, bytes32(id), expiries[id]);
     emit NameRenewed(id, expiries[id]);
 
@@ -348,6 +378,7 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     _burn(id);
     delete expiries[id];
     delete names[id];
+    delete highestTier[id];
 
     emit NameBurned(id, prevOwner);
   }
@@ -378,10 +409,25 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
       label = "?";
     }
     string memory dotTld = string.concat(".", baseNodeName);
-    string memory svg = _generateSVG(label, dotTld);
+
+    // Color = the "best ever" tier this name has reached, EXCEPT once the name
+    // is actually expired it shows red. The tier ratchets up on register/renew
+    // and never down with the passage of time, so a 15-year buy stays gold even
+    // years later — but a lapsed name is clearly flagged red.
+    //   색 = 이 이름이 도달한 역대 최고 등급. 단, 실제로 만료되면 red. 등급은
+    //   등록·갱신 때 오르고 시간 경과로는 안 내려가므로 15년 구매는 수년 뒤에도
+    //   골드 유지 — 그러나 만료된 이름은 명확히 red로 표시.
+    bool expired = expiries[tokenId] <= block.timestamp;
+    uint8 tier = highestTier[tokenId];
+
+    string memory svg = _generateSVG(label, dotTld, tier, expired);
+    string memory tierName = _tierNameOf(tier, expired);
+
     string memory json = string.concat(
       '{"name":"', label, dotTld, '",'
-      '"description":"DEXignation Name: ', label, dotTld, '",'
+      '"description":"DEXignation Name: ', label, dotTld,
+      ' (', tierName, ' tier)",'
+      '"attributes":[{"trait_type":"Tier","value":"', tierName, '"}],'
       '"image":"data:image/svg+xml;base64,',
       Base64.encode(bytes(svg)),
       '"}'
@@ -392,30 +438,240 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     );
   }
 
-  /// @dev Generate the SVG artwork for a given label. Pure function — same
-  ///      input always produces the same output.
-  ///      라벨에 대한 SVG 아트워크 생성. pure 함수.
+  // ════════════════════════════════════════════════════════════════════════
+  // On-chain SVG art — hexagonal card, tier-colored by remaining duration.
+  //   온체인 SVG 아트 — 육각형 카드, 잔여 기간별 등급 색.
+  //
+  //   Tiers (by remaining seconds):
+  //     expired      → red
+  //     0–1 year     → charcoal
+  //     1–3 years    → mud
+  //     3–5 years    → burnt orange
+  //     5–10 years   → yellow
+  //     10 years+    → gold
+  //
+  //   No SVG <filter> is used (grain/shadow) so the art renders identically
+  //   across marketplaces and wallets, and stays cheap to encode on-chain.
+  //   Gradients, shine, and layered borders are kept. The name is shown in
+  //   full, wrapping across up to 3 lines with a font size that scales to the
+  //   label length so even a 50-character name fits the hex interior.
+  //   필터(grain/shadow) 미사용 → 마켓플레이스·지갑에서 동일 렌더, 온체인
+  //   인코딩 저렴. 그라데이션·shine·다층 테두리 유지. 이름은 전부 표시하며,
+  //   길이에 따라 폰트가 줄고 최대 3줄로 줄바꿈해 50자도 육각 내부에 들어감.
+  // ════════════════════════════════════════════════════════════════════════
+
+  uint256 private constant ONE_YEAR_SECS = 365 days;
+
+  /// @dev Map a guaranteed duration (seconds) to a tier index 0..4:
+  ///      0=charcoal (<1y), 1=mud (<3y), 2=burnt orange (<5y),
+  ///      3=yellow (<10y), 4=gold (>=10y). Used to ratchet `highestTier`.
+  ///      보장 기간(초)을 등급 번호 0~4로 매핑. highestTier 상승 판정에 사용.
+  function _tierOf(uint256 duration) internal pure returns (uint8) {
+    // Use <= so an exact-N-year purchase lands in the intended tier:
+    // exactly 1y → charcoal, 3y → mud, 5y → orange, 10y → yellow, 15y → gold.
+    //   <= 사용: 정확히 N년 구매가 의도한 등급에 들어가도록.
+    //   1년→charcoal, 3년→mud, 5년→orange, 10년→yellow, 15년→gold.
+    if (duration <= 1 * ONE_YEAR_SECS) return 0;
+    if (duration <= 3 * ONE_YEAR_SECS) return 1;
+    if (duration <= 5 * ONE_YEAR_SECS) return 2;
+    if (duration <= 10 * ONE_YEAR_SECS) return 3;
+    return 4;
+  }
+
+  /// @dev Human-readable tier name for a tier index (0..4), or expired.
+  ///      등급 번호(0~4)에 대한 사람이 읽는 등급명, 또는 만료.
+  function _tierNameOf(uint8 tier, bool expired)
+    internal
+    pure
+    returns (string memory)
+  {
+    if (expired) return "Expired";
+    if (tier == 0) return "Charcoal";
+    if (tier == 1) return "Mud";
+    if (tier == 2) return "Burnt Orange";
+    if (tier == 3) return "Yellow";
+    return "Gold";
+  }
+
+  /// @dev Returns the three gradient stops (light/mid/dark), the accent
+  ///      border color, and the text color for a tier index (or expired=red).
+  ///      Light cards (yellow/gold) use dark text; dark cards use light text.
+  ///      등급 번호(또는 만료=red)의 3단 그라데이션·테두리·글자색 반환.
+  ///      밝은 카드(yellow/gold)는 어두운 글자, 어두운 카드는 밝은 글자.
+  function _tierColorsOf(uint8 tier, bool expired)
+    internal
+    pure
+    returns (
+      string memory c0,
+      string memory c1,
+      string memory c2,
+      string memory accent,
+      string memory textColor
+    )
+  {
+    if (expired) {
+      return ("#ff3226", "#9e0907", "#280303", "#ff5040", "#ffffff");
+    } else if (tier == 0) {
+      return ("#888f93", "#202326", "#050607", "#9aa1a6", "#ffffff");
+    } else if (tier == 1) {
+      return ("#a37842", "#5a3f22", "#160d05", "#c79a5e", "#ffffff");
+    } else if (tier == 2) {
+      return ("#ff7a12", "#c64b00", "#2f0e00", "#ff9a4d", "#ffffff");
+    } else if (tier == 3) {
+      return ("#ffd02c", "#d6a300", "#382800", "#ffe070", "#3a2a00");
+    } else {
+      return ("#ffd875", "#b68427", "#352100", "#ffe9a0", "#3a2a00");
+    }
+  }
+
+  /// @dev Generate the hexagonal SVG card. Pure: same (label, tier, expired)
+  ///      always yields the same art.
+  ///      육각형 SVG 카드 생성. pure: 같은 (label, tier, expired)은 항상 같은 아트.
   function _generateSVG(
     string memory label,
-    string memory dotTld
+    string memory dotTld,
+    uint8 tier,
+    bool expired
   ) internal pure returns (string memory) {
-    return string.concat(
+    (
+      string memory c0,
+      string memory c1,
+      string memory c2,
+      string memory accent,
+      string memory textColor
+    ) = _tierColorsOf(tier, expired);
+
+    // Hexagon points for a 400x400 canvas, centered, matching the DEX logo.
+    //   400x400 캔버스 기준, DEX 로고 형태의 중앙 육각형 좌표.
+    string memory hexPts = "200,40 340,130 340,310 200,400 60,310 60,130";
+    string memory hexInner = "200,70 314,143 314,297 200,370 86,297 86,143";
+
+    string memory head = string.concat(
       '<svg width="400" height="400" xmlns="http://www.w3.org/2000/svg">'
       '<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">'
-      '<stop offset="0%" stop-color="#07080A"/>'
-      '<stop offset="100%" stop-color="#0D1117"/>'
-      '</linearGradient></defs>'
-      '<rect width="400" height="400" rx="20" fill="url(#bg)"/>'
-      '<rect x="8" y="8" width="384" height="384" rx="16" fill="none" stroke="#00DC82" stroke-opacity="0.2"/>'
-      '<text x="200" y="170" text-anchor="middle" font-family="sans-serif" font-weight="bold" font-size="40" fill="#00DC82">',
-      label,
-      '</text>'
-      '<text x="200" y="220" text-anchor="middle" font-family="sans-serif" font-size="28" fill="#64748B">',
+      '<stop offset="0%" stop-color="', c0, '"/>'
+      '<stop offset="38%" stop-color="', c1, '"/>'
+      '<stop offset="100%" stop-color="', c2, '"/>'
+      '</linearGradient>'
+      '<radialGradient id="sh" cx="38%" cy="22%" r="72%">'
+      '<stop offset="0%" stop-color="#ffffff" stop-opacity="0.22"/>'
+      '<stop offset="45%" stop-color="#ffffff" stop-opacity="0.05"/>'
+      '<stop offset="100%" stop-color="#000000" stop-opacity="0"/>'
+      '</radialGradient></defs>'
+      '<rect width="400" height="400" fill="#0b0d0e"/>'
+    );
+
+    string memory frame = string.concat(
+      '<polygon points="', hexPts, '" fill="url(#bg)" stroke="#000000" stroke-width="6"/>'
+      '<polygon points="', hexPts, '" fill="none" stroke="', accent, '" stroke-width="5" stroke-opacity="0.9"/>'
+      '<polygon points="', hexInner, '" fill="none" stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.16"/>'
+      '<polygon points="', hexPts, '" fill="url(#sh)"/>'
+    );
+
+    string memory body = _nameSvg(label, dotTld, textColor);
+
+    return string.concat(head, frame, body, "</svg>");
+  }
+
+  /// @dev Render the name (wrapped, full) + the .dex suffix as SVG <text>.
+  ///      Font size and line count scale with label length so the full name
+  ///      always fits — never truncated.
+  ///      이름(줄바꿈, 전부) + .dex 접미사를 SVG <text>로 렌더. 폰트·줄 수가
+  ///      라벨 길이에 맞춰 조절되어 전체 이름이 항상 들어감 — 잘리지 않음.
+  function _nameSvg(
+    string memory label,
+    string memory dotTld,
+    string memory textColor
+  ) internal pure returns (string memory) {
+    uint256 len = bytes(label).length; // ASCII labels: bytes == chars
+
+    // Choose font size and characters-per-line by length. The hex interior is
+    // widest at the vertical center, so we center lines around y=200.
+    //   길이에 따라 폰트·줄당 글자수 선택. 육각 내부는 세로 중앙이 가장 넓어
+    //   y=200 기준으로 줄을 중앙 정렬.
+    uint256 fontSize;
+    uint256 perLine;
+    if (len <= 10) {
+      fontSize = 40; perLine = 10;
+    } else if (len <= 16) {
+      fontSize = 30; perLine = 16;
+    } else if (len <= 24) {
+      fontSize = 22; perLine = 12;
+    } else if (len <= 36) {
+      fontSize = 16; perLine = 18;
+    } else {
+      fontSize = 12; perLine = 18;
+    }
+
+    // Split into up to 3 lines of `perLine` chars.
+    //   `perLine`자씩 최대 3줄로 분할.
+    string[3] memory lines;
+    uint256 lineCount = 0;
+    uint256 pos = 0;
+    while (pos < len && lineCount < 3) {
+      uint256 take = len - pos < perLine ? len - pos : perLine;
+      lines[lineCount] = _substr(label, pos, take);
+      pos += take;
+      lineCount += 1;
+    }
+
+    // Vertically center the name block around y=195; .dex sits below it.
+    //   이름 블록을 y=195 중심으로 세로 중앙 정렬; .dex는 그 아래.
+    uint256 lineH = fontSize + 4;
+    uint256 blockTop = 195 - (lineCount * lineH) / 2;
+
+    string memory nameText = "";
+    for (uint256 i = 0; i < lineCount; i++) {
+      uint256 y = blockTop + i * lineH + fontSize; // baseline
+      nameText = string.concat(
+        nameText,
+        '<text x="200" y="', _u(y),
+        '" text-anchor="middle" font-family="sans-serif" font-weight="700" font-size="',
+        _u(fontSize), '" fill="', textColor, '">',
+        lines[i],
+        '</text>'
+      );
+    }
+
+    // .dex suffix, just under the name block.
+    //   .dex 접미사, 이름 블록 바로 아래.
+    uint256 sufY = blockTop + lineCount * lineH + 30;
+    string memory suffix = string.concat(
+      '<text x="200" y="', _u(sufY),
+      '" text-anchor="middle" font-family="sans-serif" font-weight="400" font-size="20" fill="',
+      textColor, '" fill-opacity="0.6">',
       dotTld,
       '</text>'
-      '<text x="200" y="360" text-anchor="middle" font-family="monospace" font-size="11" fill="#2D3A48">DEXignation Name Service</text>'
-      '</svg>'
     );
+
+    return string.concat(nameText, suffix);
+  }
+
+  /// @dev Extract `count` bytes from `str` starting at `start`. ASCII-safe.
+  ///      `str`의 `start`부터 `count` 바이트 추출. ASCII 전용.
+  function _substr(string memory str, uint256 start, uint256 count)
+    internal
+    pure
+    returns (string memory)
+  {
+    bytes memory s = bytes(str);
+    bytes memory out = new bytes(count);
+    for (uint256 i = 0; i < count; i++) {
+      out[i] = s[start + i];
+    }
+    return string(out);
+  }
+
+  /// @dev uint256 → decimal string (small values; for SVG coordinates).
+  ///      uint256 → 십진 문자열(작은 값; SVG 좌표용).
+  function _u(uint256 v) internal pure returns (string memory) {
+    if (v == 0) return "0";
+    uint256 d = v;
+    uint256 digits;
+    while (d != 0) { digits++; d /= 10; }
+    bytes memory buf = new bytes(digits);
+    while (v != 0) { digits -= 1; buf[digits] = bytes1(uint8(48 + v % 10)); v /= 10; }
+    return string(buf);
   }
 
   /// @notice EIP-165 interface advertisement. Required because we inherit
