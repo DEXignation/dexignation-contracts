@@ -64,6 +64,12 @@ interface IERC721Balance {
   function balanceOf(address owner) external view returns (uint256);
 }
 
+/// @dev Minimal interface for reading a user's staked balance.
+///      사용자 스테이크 잔액 조회용 최소 인터페이스.
+interface IStakingBalance {
+  function stakedOf(address staker) external view returns (uint256);
+}
+
 /// @title  DXRegistrarController
 /// @notice User-facing entry point for registering and renewing names.
 ///         Implements commit-reveal to mitigate front-running, supports
@@ -167,6 +173,26 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   ///         SBT 보유자 할인율(만분율). setter에서 상한 강제.
   uint256 public sbtDiscountBps;
 
+  /// @notice Optional staking discount. Stakers with at least
+  ///         `stakeDiscountThreshold` staked in `stakingContract` receive
+  ///         `stakeDiscountBps` off. Like the SBT discount, this does NOT
+  ///         stack with the others — the LARGEST applicable discount wins.
+  ///         zero address = off.
+  ///         스테이킹 할인. `stakingContract`에 `stakeDiscountThreshold`
+  ///         이상 스테이크한 사용자는 `stakeDiscountBps` 할인. SBT 할인과
+  ///         마찬가지로 중첩 안 함 — 적용 가능한 할인 중 최대값 적용.
+  ///         zero address면 비활성.
+  IStakingBalance public stakingContract;
+
+  /// @notice Minimum staked balance required to qualify for the discount.
+  ///         스테이킹 할인 자격을 얻기 위한 최소 스테이크량.
+  uint256 public stakeDiscountThreshold;
+
+  /// @notice Discount rate (bps) granted to qualifying stakers. Capped at
+  ///         `MAX_DISCOUNT_BPS` in the setter.
+  ///         스테이커 할인율(만분율). setter에서 상한 강제.
+  uint256 public stakeDiscountBps;
+
   /// @dev commitment hash => timestamp at which it was committed.
   ///      commitment 해시 => commit된 시각.
   mapping(bytes32 commitment => uint256 timestamp) public commitments;
@@ -180,6 +206,11 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   event SBTDiscountConfigured(
     address indexed sbtDiscountToken,
     uint256 sbtDiscountBps
+  );
+  event StakeDiscountConfigured(
+    address indexed stakingContract,
+    uint256 stakeDiscountThreshold,
+    uint256 stakeDiscountBps
   );
 
   error LabelReserved(string label);
@@ -289,25 +320,32 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     return price - (price * bps / 10000);
   }
 
-  /// @dev Returns the effective discount bps for `user`: the LARGER of the
-  ///      ERC-20 holder discount and the SBT discount (they do not stack).
-  ///      `user`의 유효 할인율: 토큰 할인과 SBT 할인 중 더 큰 값(중첩 안 함).
+  /// @dev Returns the effective discount bps for `user`: the LARGEST of the
+  ///      ERC-20 holder discount, the SBT discount, and the staking discount
+  ///      (they do not stack).
+  ///      `user`의 유효 할인율: 토큰·SBT·스테이킹 할인 중 최대값(중첩 안 함).
   function _effectiveDiscountBps(address user) internal view returns (uint256) {
-    uint256 tokenBps = 0;
+    uint256 best = 0;
+
     if (address(discountToken) != address(0) && discountBps != 0) {
       if (discountToken.balanceOf(user) >= requiredHoldAmount) {
-        tokenBps = discountBps;
+        if (discountBps > best) best = discountBps;
       }
     }
 
-    uint256 sbtBps = 0;
     if (address(sbtDiscountToken) != address(0) && sbtDiscountBps != 0) {
       if (sbtDiscountToken.balanceOf(user) > 0) {
-        sbtBps = sbtDiscountBps;
+        if (sbtDiscountBps > best) best = sbtDiscountBps;
       }
     }
 
-    return tokenBps >= sbtBps ? tokenBps : sbtBps;
+    if (address(stakingContract) != address(0) && stakeDiscountBps != 0) {
+      if (stakingContract.stakedOf(user) >= stakeDiscountThreshold) {
+        if (stakeDiscountBps > best) best = stakeDiscountBps;
+      }
+    }
+
+    return best;
   }
 
   /// @notice True if `user` currently qualifies for any discount (token or
@@ -760,6 +798,37 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
       sbtDiscountBps = _sbtBps;
     }
     emit SBTDiscountConfigured(_sbtToken, sbtDiscountBps);
+  }
+
+  /// @notice Configure the staking discount. Stakers with at least
+  ///         `_threshold` staked in `_staking` get `_bps` off. Pass
+  ///         `_staking = address(0)` to disable. `_bps` is capped at
+  ///         `MAX_DISCOUNT_BPS`. Owner-only.
+  ///         스테이킹 할인 설정. `_staking`에 `_threshold` 이상 스테이크 시
+  ///         `_bps` 할인. `_staking = address(0)`이면 비활성. `_bps`는
+  ///         `MAX_DISCOUNT_BPS` 상한. 오너 전용.
+  function setStakeDiscount(
+    address _staking,
+    uint256 _threshold,
+    uint256 _bps
+  ) external onlyOwner {
+    if (_bps > MAX_DISCOUNT_BPS) {
+      revert DiscountRateTooHigh(_bps, MAX_DISCOUNT_BPS);
+    }
+    // When enabling, demand a non-zero rate; when disabling (zero address),
+    // force rate and threshold to zero so stale values can't linger.
+    //   활성화 시 0이 아닌 율 요구. 비활성화(zero address) 시 율·임계치를 0으로
+    //   강제해 낡은 값이 남지 않게 한다.
+    if (_staking == address(0)) {
+      stakingContract = IStakingBalance(address(0));
+      stakeDiscountThreshold = 0;
+      stakeDiscountBps = 0;
+    } else {
+      stakingContract = IStakingBalance(_staking);
+      stakeDiscountThreshold = _threshold;
+      stakeDiscountBps = _bps;
+    }
+    emit StakeDiscountConfigured(_staking, stakeDiscountThreshold, stakeDiscountBps);
   }
 
   /// @notice Emergency stop. Halts register/renew (native and token) while
