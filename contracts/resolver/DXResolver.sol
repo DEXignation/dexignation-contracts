@@ -193,14 +193,14 @@ contract DXResolver is Ownable {
   }
   
   /// @notice Set coin address (v1.0 호환성)
-  function setAddr(bytes32 node, uint256 coinType, bytes calldata addr)
+  function setAddr(bytes32 node, uint256 coinType, bytes calldata addrBytes)
     external
     onlyTokenOwner(node)
   {
     require(bytes(supportedCoins[coinType]).length > 0, "Unsupported coin type");
-    _validateAddress(coinType, addr);
-    addresses[node][coinType] = addr;
-    emit AddressChanged(node, coinType, addr);
+    _validateAddress(coinType, addrBytes);
+    addresses[node][coinType] = addrBytes;
+    emit AddressChanged(node, coinType, addrBytes);
   }
   
   /// @notice Get coin address (v1.0 호환성)
@@ -331,54 +331,54 @@ contract DXResolver is Ownable {
   }
   
   /// @notice Validate address format for coin type
-  function _validateAddress(uint256 coinType, bytes calldata addr) internal pure {
+  function _validateAddress(uint256 coinType, bytes calldata addrBytes) internal pure {
     // EVM addresses: 20 bytes (0x... format)
     if (coinType == 60 || coinType == 137 || coinType == 42161 || 
         coinType == 10 || coinType == 8453 || coinType == 43114 ||
         coinType == 250 || coinType == 56) {
-      require(addr.length == 20, "EVM address must be 20 bytes");
+      require(addrBytes.length == 20, "EVM address must be 20 bytes");
       return;
     }
     
     // Bitcoin: 20 bytes (raw)
     if (coinType == 0) {
-      require(addr.length == 20, "Bitcoin address must be 20 bytes");
+      require(addrBytes.length == 20, "Bitcoin address must be 20 bytes");
       return;
     }
     
     // Dogecoin, Litecoin: 20 bytes
     if (coinType == 3 || coinType == 2) {
-      require(addr.length == 20, "Address must be 20 bytes");
+      require(addrBytes.length == 20, "Address must be 20 bytes");
       return;
     }
     
     // Solana: 32 bytes
     if (coinType == 501) {
-      require(addr.length == 32, "Solana address must be 32 bytes");
+      require(addrBytes.length == 32, "Solana address must be 32 bytes");
       return;
     }
     
     // Cosmos: 20 bytes (bech32 prefix on-chain validation 생략, off-chain에서 검증)
     if (coinType == 118) {
-      require(addr.length >= 20, "Cosmos address must be at least 20 bytes");
+      require(addrBytes.length >= 20, "Cosmos address must be at least 20 bytes");
       return;
     }
     
     // Tron: 20 bytes
     if (coinType == 195) {
-      require(addr.length == 20, "Tron address must be 20 bytes");
+      require(addrBytes.length == 20, "Tron address must be 20 bytes");
       return;
     }
     
     // TON: 32 bytes
     if (coinType == 607) {
-      require(addr.length == 32, "TON address must be 32 bytes");
+      require(addrBytes.length == 32, "TON address must be 32 bytes");
       return;
     }
     
     // Ripple: 20 bytes
     if (coinType == 144) {
-      require(addr.length == 20, "Ripple address must be 20 bytes");
+      require(addrBytes.length == 20, "Ripple address must be 20 bytes");
       return;
     }
     

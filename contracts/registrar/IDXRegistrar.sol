@@ -92,7 +92,7 @@ interface IDXRegistrar is IERC721 {
   /// @notice Grace period (in seconds) after expiry during which the
   ///         previous owner may still renew.
   ///         만료 후에도 이전 소유자가 갱신할 수 있는 유예 기간(초).
-  function GRACE_PERIOD() external view returns (uint256);
+  function gracePeriod() external view returns (uint256);
 
   function register(
     string calldata label,

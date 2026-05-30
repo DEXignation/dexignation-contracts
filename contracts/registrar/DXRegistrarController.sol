@@ -411,7 +411,7 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
 
     // Premium starts only after the grace period has fully elapsed.
     //   premium은 유예 기간이 완전히 지난 뒤부터 적용.
-    uint256 graceEndsAt = previousExpires + registrar.GRACE_PERIOD();
+    uint256 graceEndsAt = previousExpires + registrar.gracePeriod();
     if (block.timestamp <= graceEndsAt) return base;
 
     uint256 premium = priceOracle.premiumAttoUSD(graceEndsAt);
