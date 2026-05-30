@@ -58,6 +58,12 @@ import {IDXResolver} from "../resolver/IDXResolver.sol";
 import "../utils/StringUtils.sol";
 import "../utils/EVMCoinUtils.sol";
 
+/// @dev Minimal interface for SBT/ERC-721 balance checks (badge count).
+///      SBT/ERC-721 보유 개수 확인용 최소 인터페이스.
+interface IERC721Balance {
+  function balanceOf(address owner) external view returns (uint256);
+}
+
 /// @title  DXRegistrarController
 /// @notice User-facing entry point for registering and renewing names.
 ///         Implements commit-reveal to mitigate front-running, supports
@@ -145,6 +151,22 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   ///         할인율 하드캡. 5000 bps = 50%.
   uint256 public constant MAX_DISCOUNT_BPS = 5000;
 
+  /// @notice Optional contribution-SBT discount. Holders of at least one
+  ///         badge from `sbtDiscountToken` receive `sbtDiscountBps` off.
+  ///         When both the ERC-20 holder discount and the SBT discount
+  ///         apply, only the LARGER of the two is used (they do not stack),
+  ///         preserving the `MAX_DISCOUNT_BPS` guarantee. zero address = off.
+  ///         기여-SBT 할인. `sbtDiscountToken` 배지를 1개 이상 보유하면
+  ///         `sbtDiscountBps` 할인. 토큰 할인과 동시 해당 시 둘 중 더 큰
+  ///         할인 하나만 적용(중첩 안 함) → MAX_DISCOUNT_BPS 보장 유지.
+  ///         zero address면 비활성.
+  IERC721Balance public sbtDiscountToken;
+
+  /// @notice Discount rate (bps) granted to SBT holders. Capped at
+  ///         `MAX_DISCOUNT_BPS` in the setter.
+  ///         SBT 보유자 할인율(만분율). setter에서 상한 강제.
+  uint256 public sbtDiscountBps;
+
   /// @dev commitment hash => timestamp at which it was committed.
   ///      commitment 해시 => commit된 시각.
   mapping(bytes32 commitment => uint256 timestamp) public commitments;
@@ -154,6 +176,10 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     address indexed discountToken,
     uint256 requiredHoldAmount,
     uint256 discountBps
+  );
+  event SBTDiscountConfigured(
+    address indexed sbtDiscountToken,
+    uint256 sbtDiscountBps
   );
 
   error LabelReserved(string label);
@@ -254,20 +280,47 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   function _applyDiscount(uint256 price, address user)
     internal view returns (uint256)
   {
-    if (address(discountToken) == address(0) || discountBps == 0) return price;
-    if (discountToken.balanceOf(user) < requiredHoldAmount) return price;
-    // `discountBps <= MAX_DISCOUNT_BPS` (50%) is enforced in the setter,
-    // so `(price * discountBps) / 10000 <= price` always holds.
-    //   setter에서 상한 강제되므로 항상 `할인액 <= price`.
-    return price - (price * discountBps / 10000);
+    uint256 bps = _effectiveDiscountBps(user);
+    if (bps == 0) return price;
+    // `bps <= MAX_DISCOUNT_BPS` (50%) is guaranteed because each source is
+    // capped in its setter and we take the max (not the sum) below.
+    //   각 할인원이 setter에서 상한 강제되고 아래에서 합이 아닌 max를 취하므로
+    //   `bps <= MAX_DISCOUNT_BPS` 보장 → 항상 `할인액 <= price`.
+    return price - (price * bps / 10000);
   }
 
-  /// @notice True if `user` currently qualifies for the holder discount.
-  ///         Useful for UIs that want to render "X% off" badges.
-  ///         `user`가 현재 할인 조건을 충족하는지. UI 배지 표시용.
+  /// @dev Returns the effective discount bps for `user`: the LARGER of the
+  ///      ERC-20 holder discount and the SBT discount (they do not stack).
+  ///      `user`의 유효 할인율: 토큰 할인과 SBT 할인 중 더 큰 값(중첩 안 함).
+  function _effectiveDiscountBps(address user) internal view returns (uint256) {
+    uint256 tokenBps = 0;
+    if (address(discountToken) != address(0) && discountBps != 0) {
+      if (discountToken.balanceOf(user) >= requiredHoldAmount) {
+        tokenBps = discountBps;
+      }
+    }
+
+    uint256 sbtBps = 0;
+    if (address(sbtDiscountToken) != address(0) && sbtDiscountBps != 0) {
+      if (sbtDiscountToken.balanceOf(user) > 0) {
+        sbtBps = sbtDiscountBps;
+      }
+    }
+
+    return tokenBps >= sbtBps ? tokenBps : sbtBps;
+  }
+
+  /// @notice True if `user` currently qualifies for any discount (token or
+  ///         SBT). Useful for UIs that want to render "X% off" badges.
+  ///         `user`가 토큰·SBT 중 하나라도 할인 조건을 충족하는지. UI 배지용.
   function isDiscountEligible(address user) external view returns (bool) {
-    if (address(discountToken) == address(0) || discountBps == 0) return false;
-    return discountToken.balanceOf(user) >= requiredHoldAmount;
+    return _effectiveDiscountBps(user) > 0;
+  }
+
+  /// @notice The effective discount bps `user` would receive right now.
+  ///         `user`가 현재 받을 유효 할인율(만분율).
+  function effectiveDiscountBps(address user) external view returns (uint256) {
+    return _effectiveDiscountBps(user);
   }
 
   /// @dev Revert if the label is reserved AND the caller is not its
@@ -682,6 +735,31 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     bool allowed
   ) external override onlyOwner {
     allowedPaymentTokens[token] = allowed;
+  }
+
+  /// @notice Configure the contribution-SBT discount. Holders of at least
+  ///         one badge from `_sbtToken` get `_sbtBps` off. Pass
+  ///         `_sbtToken = address(0)` to disable. `_sbtBps` is capped at
+  ///         `MAX_DISCOUNT_BPS`. Owner-only.
+  ///         기여-SBT 할인 설정. `_sbtToken` 배지 1개 이상 보유 시 `_sbtBps`
+  ///         할인. `_sbtToken = address(0)`이면 비활성. `_sbtBps`는
+  ///         `MAX_DISCOUNT_BPS` 상한. 오너 전용.
+  function setSBTDiscount(address _sbtToken, uint256 _sbtBps) external onlyOwner {
+    if (_sbtBps > MAX_DISCOUNT_BPS) {
+      revert DiscountRateTooHigh(_sbtBps, MAX_DISCOUNT_BPS);
+    }
+    // When enabling, require a non-zero rate; when disabling (zero address),
+    // force the rate to zero so a stale non-zero bps can't linger.
+    //   활성화 시 0이 아닌 율 요구. 비활성화(zero address) 시 율을 0으로 강제해
+    //   낡은 비-0 값이 남지 않게 한다.
+    if (_sbtToken == address(0)) {
+      sbtDiscountToken = IERC721Balance(address(0));
+      sbtDiscountBps = 0;
+    } else {
+      sbtDiscountToken = IERC721Balance(_sbtToken);
+      sbtDiscountBps = _sbtBps;
+    }
+    emit SBTDiscountConfigured(_sbtToken, sbtDiscountBps);
   }
 
   /// @notice Emergency stop. Halts register/renew (native and token) while

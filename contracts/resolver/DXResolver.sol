@@ -300,6 +300,12 @@ contract DXResolver is Ownable {
     string calldata key,
     string calldata langCode
   ) external view returns (string memory) {
+    // Expired names must not leak stale records (consistent with text()).
+    //   만료된 이름은 오래된 레코드를 노출하면 안 됨 (text()와 일관).
+    if (registry.isExpired(node)) {
+      return "";
+    }
+
     // 1. 요청한 언어로 조회
     string memory result = multiLangText[node][key][langCode];
     if (bytes(result).length > 0) {
@@ -322,6 +328,98 @@ contract DXResolver is Ownable {
   function addSupportedLanguage(string calldata langCode) external onlyOwner {
     supportedLanguages[langCode] = true;
     emit LanguageSupportAdded(langCode);
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
+  // LOCALIZED PROFILE (v1.2) — bundle the standard profile keys per language
+  //   현지화 프로필 — 표준 프로필 키를 언어별로 한 번에 설정/조회
+  // ════════════════════════════════════════════════════════════════════════
+
+  /// @notice Standard profile field keys, stored via the multi-language
+  ///         text mechanism so they interoperate with getMultiLangText().
+  ///         표준 프로필 필드 키. 다국어 text 메커니즘으로 저장되어
+  ///         getMultiLangText()와 상호운용된다.
+  string private constant PK_NAME   = "profile.name";
+  string private constant PK_BIO    = "profile.bio";
+  string private constant PK_AVATAR = "profile.avatar";
+  string private constant PK_URL    = "profile.url";
+
+  event ProfileChanged(bytes32 indexed node, string indexed langCode);
+
+  /// @notice Set a full localized profile in one call. Empty strings clear
+  ///         the corresponding field. Owner/operator only (same auth as text).
+  ///         현지화 프로필을 한 번에 설정. 빈 문자열은 해당 필드 삭제.
+  ///         소유자/오퍼레이터만(텍스트와 동일 권한).
+  /// @param node     Domain node hash / 도메인 노드 해시
+  /// @param langCode Language code (must be supported) / 언어 코드(지원 필요)
+  /// @param name_    Display name / 표시 이름
+  /// @param bio      Short biography / 소개
+  /// @param avatar   Avatar URI (e.g. ipfs://...) / 아바타 URI
+  /// @param url      Website URL / 웹사이트 URL
+  function setProfile(
+    bytes32 node,
+    string calldata langCode,
+    string calldata name_,
+    string calldata bio,
+    string calldata avatar,
+    string calldata url
+  ) external onlyTokenOwner(node) {
+    require(supportedLanguages[langCode], "Language not supported");
+    multiLangText[node][PK_NAME][langCode]   = name_;
+    multiLangText[node][PK_BIO][langCode]    = bio;
+    multiLangText[node][PK_AVATAR][langCode] = avatar;
+    multiLangText[node][PK_URL][langCode]    = url;
+    emit ProfileChanged(node, langCode);
+  }
+
+  /// @notice Read a localized profile in one call, with English fallback per
+  ///         field. Returns empty strings for an expired node.
+  ///         현지화 프로필을 한 번에 조회. 필드별 영어 폴백. 만료 노드는 공백.
+  /// @return name_  Display name in `langCode` (or en fallback)
+  /// @return bio    Biography
+  /// @return avatar Avatar URI
+  /// @return url    Website URL
+  function getProfile(
+    bytes32 node,
+    string calldata langCode
+  )
+    external
+    view
+    returns (
+      string memory name_,
+      string memory bio,
+      string memory avatar,
+      string memory url
+    )
+  {
+    if (registry.isExpired(node)) {
+      return ("", "", "", "");
+    }
+    name_  = _profileField(node, PK_NAME, langCode);
+    bio    = _profileField(node, PK_BIO, langCode);
+    avatar = _profileField(node, PK_AVATAR, langCode);
+    url    = _profileField(node, PK_URL, langCode);
+  }
+
+  /// @dev Per-field lookup with English fallback (no expiry check here;
+  ///      callers that need it check once at the top, as getProfile does).
+  ///      필드별 조회 + 영어 폴백 (만료 체크는 호출부에서 1회 수행).
+  function _profileField(
+    bytes32 node,
+    string memory key,
+    string calldata langCode
+  ) internal view returns (string memory) {
+    string memory result = multiLangText[node][key][langCode];
+    if (bytes(result).length > 0) {
+      return result;
+    }
+    if (!_stringEqual(langCode, "en")) {
+      result = multiLangText[node][key]["en"];
+      if (bytes(result).length > 0) {
+        return result;
+      }
+    }
+    return textRecords[node][key];
   }
   
   // ════════════════════════════════════════════════════════════════════════
