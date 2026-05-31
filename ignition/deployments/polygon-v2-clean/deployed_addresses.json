@@ -1,0 +1,9 @@
+{
+  "DXDeployPolygon#DXPriceOracle": "0xc3751923bF9C485Ac927096D42469f6287156B42",
+  "DXDeployPolygon#DXRegistry": "0x0eE48aCcB768758Ba509Ef08D4f00d03C1B6e3A9",
+  "DXDeployPolygon#DXReservations": "0xfB22CE3135e8a0b6c91bb74884Ea73A4caa6b32b",
+  "DXDeployPolygon#DXRegistrar": "0x1DaDBb206a05b2821935c467015C77fD61e02951",
+  "DXDeployPolygon#DXResolver": "0xb8b44561A52cf2929D3E6BF02d3B18a9e20CdE82",
+  "DXDeployPolygon#DXRegistrarController": "0xd456dC842B6c05084a0e884b7247F9ee90472432",
+  "DXDeployPolygon#DXReverseRegistrar": "0xb6b165eB79E1Acf54eE8acFAf5FCC77241D6Fef0"
+}

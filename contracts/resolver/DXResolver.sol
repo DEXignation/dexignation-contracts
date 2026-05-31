@@ -43,24 +43,40 @@ contract DXResolver is Ownable {
   
   IDXRegistry public immutable registry;
   
-  // v1.0: Basic text records
-  mapping(bytes32 => mapping(string => string)) public textRecords;
+  // ── Record versioning (v2: transfer invalidation) ──────────────────────
+  // Each node has a record version. All record mappings are namespaced by it.
+  // On NFT transfer, the registrar calls `bumpVersion(node)` to increment it,
+  // atomically invalidating EVERY record kind for that node (addr, text,
+  // contenthash, multilang, abi, agent) in O(1) gas. Old records stay on chain
+  // under the previous version for auditability, but are no longer returned by
+  // reads. The new owner sets fresh records under the new version — preventing
+  // funds being sent to a previous owner after a name changes hands.
+  //   노드별 레코드 버전. 모든 레코드 매핑이 이 버전으로 네임스페이스된다.
+  //   NFT 전송 시 registrar가 bumpVersion(node)로 버전을 올리면 해당 노드의
+  //   모든 레코드가 O(1)로 일괄 무효화된다. 옛 레코드는 이전 버전 아래 체인에
+  //   남아 이력 추적이 가능하나 조회되지 않는다. 이름 양도 후 이전 소유자에게
+  //   자금이 송금되는 것을 방지한다.
+  mapping(bytes32 => uint64) public recordVersions;
+
+  /// @dev Current record version for a node (indexes every record mapping).
+  function _ver(bytes32 node) internal view returns (uint64) {
+    return recordVersions[node];
+  }
+
+  // v1.0: Basic text records  →  node => version => key => value
+  mapping(bytes32 => mapping(uint64 => mapping(string => string))) internal textRecords;
   
-  // v1.1: Multi-language text records
-  // node => (key => (languageCode => value))
-  // 예: node => ("description" => ("ko" => "Web3 개발자"))
-  mapping(bytes32 => mapping(string => mapping(string => string))) public multiLangText;
+  // v1.1: Multi-language text records  →  node => version => key => lang => value
+  mapping(bytes32 => mapping(uint64 => mapping(string => mapping(string => string)))) internal multiLangText;
   
-  // v1.0: Contenthash (IPFS, Arweave, Swarm 등)
-  mapping(bytes32 => bytes) public contenthashes;
+  // v1.0: Contenthash  →  node => version => hash
+  mapping(bytes32 => mapping(uint64 => bytes)) internal contenthashes;
   
-  // v1.0: Multi-coin addresses
-  mapping(bytes32 => mapping(uint256 => bytes)) public addresses;
+  // v1.0: Multi-coin addresses  →  node => version => coinType => addr
+  mapping(bytes32 => mapping(uint64 => mapping(uint256 => bytes))) internal addresses;
   
-  // v1.1: Full ABI Support (EIP-205)
-  // node => (chainId => (contentType => abiData))
-  // contentType: 4 = JSON (EIP-205 표준)
-  mapping(bytes32 => mapping(uint256 => mapping(uint256 => bytes))) public abiRecords;
+  // v1.1: Full ABI Support (EIP-205)  →  node => version => chainId => contentType => data
+  mapping(bytes32 => mapping(uint64 => mapping(uint256 => mapping(uint256 => bytes)))) internal abiRecords;
   
   // v1.1: Language support flag
   mapping(string => bool) public supportedLanguages;
@@ -102,7 +118,8 @@ contract DXResolver is Ownable {
 
   /// @notice Per-node agent identity + payment-routing record.
   ///         노드별 에이전트 신원 + 결제 라우팅 레코드.
-  mapping(bytes32 => AgentRecord) private agentRecords;
+  // node => version => agent record (versioned for transfer invalidation)
+  mapping(bytes32 => mapping(uint64 => AgentRecord)) private agentRecords;
 
   // ── Custom errors ──────────────────────────────────────────────────────
   error ContenthashTooLong(uint256 length, uint256 maxLength);
@@ -145,6 +162,38 @@ contract DXResolver is Ownable {
       "Not authorized"
     );
     _;
+  }
+
+  // ── Registrar wiring (v2) ──────────────────────────────────────────────
+  // The registrar (NFT contract) is allowed to bump a node's record version
+  // on transfer. Set once after deployment via `setRegistrar`.
+  //   registrar(NFT 컨트랙트)만 전송 시 노드의 레코드 버전을 올릴 수 있다.
+  //   배포 후 setRegistrar로 1회 설정한다.
+  address public registrar;
+
+  event RegistrarSet(address indexed registrar);
+  event RecordsInvalidated(bytes32 indexed node, uint64 newVersion);
+
+  modifier onlyRegistrar() {
+    require(msg.sender == registrar, "Only registrar");
+    _;
+  }
+
+  /// @notice Wire the registrar that may invalidate records on transfer.
+  ///         전송 시 레코드를 무효화할 수 있는 registrar를 연결한다.
+  function setRegistrar(address _registrar) external onlyOwner {
+    registrar = _registrar;
+    emit RegistrarSet(_registrar);
+  }
+
+  /// @notice Invalidate ALL records for a node by bumping its version.
+  ///         Called by the registrar on NFT transfer. Old records remain on
+  ///         chain under the previous version (history) but are no longer read.
+  ///         노드의 모든 레코드를 버전 증가로 무효화한다. NFT 전송 시 registrar가
+  ///         호출. 옛 레코드는 이전 버전 아래 남으나(이력) 더는 조회되지 않는다.
+  function bumpVersion(bytes32 node) external onlyRegistrar {
+    recordVersions[node]++;
+    emit RecordsInvalidated(node, recordVersions[node]);
   }
 
   /// @notice Approve or revoke `operator` to manage all of caller's records.
@@ -234,7 +283,7 @@ contract DXResolver is Ownable {
     if (bytes(value).length > MAX_TEXT_VALUE_LENGTH) {
       revert TextValueTooLong(bytes(value).length, MAX_TEXT_VALUE_LENGTH);
     }
-    textRecords[node][key] = value;
+    textRecords[node][_ver(node)][key] = value;
     emit TextChanged(node, key, value);
   }
   
@@ -247,7 +296,7 @@ contract DXResolver is Ownable {
     if (registry.isExpired(node)) {
       return "";
     }
-    return textRecords[node][key];
+    return textRecords[node][_ver(node)][key];
   }
   
   /// @notice Set contenthash (v1.0 호환성)
@@ -258,7 +307,7 @@ contract DXResolver is Ownable {
     if (hash.length > MAX_CONTENTHASH_LENGTH) {
       revert ContenthashTooLong(hash.length, MAX_CONTENTHASH_LENGTH);
     }
-    contenthashes[node] = hash;
+    contenthashes[node][_ver(node)] = hash;
     emit ContenthashChanged(node, hash);
   }
   
@@ -271,7 +320,7 @@ contract DXResolver is Ownable {
     if (registry.isExpired(node)) {
       return "";
     }
-    return contenthashes[node];
+    return contenthashes[node][_ver(node)];
   }
   
   /// @notice Set coin address (v1.0 호환성)
@@ -281,7 +330,7 @@ contract DXResolver is Ownable {
   {
     require(bytes(supportedCoins[coinType]).length > 0, "Unsupported coin type");
     _validateAddress(coinType, addrBytes);
-    addresses[node][coinType] = addrBytes;
+    addresses[node][_ver(node)][coinType] = addrBytes;
     emit AddressChanged(node, coinType, addrBytes);
   }
   
@@ -291,7 +340,7 @@ contract DXResolver is Ownable {
     view
     returns (bytes memory)
   {
-    return addresses[node][coinType];
+    return addresses[node][_ver(node)][coinType];
   }
   
   // ════════════════════════════════════════════════════════════════════════
@@ -310,7 +359,7 @@ contract DXResolver is Ownable {
     string calldata value
   ) external onlyTokenOwner(node) {
     require(supportedLanguages[langCode], "Language not supported");
-    multiLangText[node][key][langCode] = value;
+    multiLangText[node][_ver(node)][key][langCode] = value;
     emit MultiLangTextChanged(node, key, langCode, value);
   }
   
@@ -331,21 +380,21 @@ contract DXResolver is Ownable {
     }
 
     // 1. 요청한 언어로 조회
-    string memory result = multiLangText[node][key][langCode];
+    string memory result = multiLangText[node][_ver(node)][key][langCode];
     if (bytes(result).length > 0) {
       return result;
     }
     
     // 2. 없으면 영문(en) 폴백
     if (!_stringEqual(langCode, "en")) {
-      result = multiLangText[node][key]["en"];
+      result = multiLangText[node][_ver(node)][key]["en"];
       if (bytes(result).length > 0) {
         return result;
       }
     }
     
     // 3. 다국어 레코드도 없으면 기존 v1.0 텍스트 레코드 조회
-    return textRecords[node][key];
+    return textRecords[node][_ver(node)][key];
   }
   
   /// @notice Add new supported language (Owner only)
@@ -389,10 +438,10 @@ contract DXResolver is Ownable {
     string calldata url
   ) external onlyTokenOwner(node) {
     require(supportedLanguages[langCode], "Language not supported");
-    multiLangText[node][PK_NAME][langCode]   = name_;
-    multiLangText[node][PK_BIO][langCode]    = bio;
-    multiLangText[node][PK_AVATAR][langCode] = avatar;
-    multiLangText[node][PK_URL][langCode]    = url;
+    multiLangText[node][_ver(node)][PK_NAME][langCode]   = name_;
+    multiLangText[node][_ver(node)][PK_BIO][langCode]    = bio;
+    multiLangText[node][_ver(node)][PK_AVATAR][langCode] = avatar;
+    multiLangText[node][_ver(node)][PK_URL][langCode]    = url;
     emit ProfileChanged(node, langCode);
   }
 
@@ -433,17 +482,17 @@ contract DXResolver is Ownable {
     string memory key,
     string calldata langCode
   ) internal view returns (string memory) {
-    string memory result = multiLangText[node][key][langCode];
+    string memory result = multiLangText[node][_ver(node)][key][langCode];
     if (bytes(result).length > 0) {
       return result;
     }
     if (!_stringEqual(langCode, "en")) {
-      result = multiLangText[node][key]["en"];
+      result = multiLangText[node][_ver(node)][key]["en"];
       if (bytes(result).length > 0) {
         return result;
       }
     }
-    return textRecords[node][key];
+    return textRecords[node][_ver(node)][key];
   }
   
   // ════════════════════════════════════════════════════════════════════════
@@ -479,7 +528,7 @@ contract DXResolver is Ownable {
     address payTo,
     address payToken
   ) external onlyTokenOwner(node) {
-    agentRecords[node] = AgentRecord({
+    agentRecords[node][_ver(node)] = AgentRecord({
       registry: registry_,
       agentId: agentId,
       cardURI: cardURI,
@@ -492,7 +541,7 @@ contract DXResolver is Ownable {
   /// @notice Remove the agent record for `node`. Owner/operator only.
   ///         `node`의 에이전트 레코드 삭제. 소유자/operator만.
   function clearAgent(bytes32 node) external onlyTokenOwner(node) {
-    delete agentRecords[node];
+    delete agentRecords[node][_ver(node)];
     emit AgentRecordCleared(node);
   }
 
@@ -513,7 +562,7 @@ contract DXResolver is Ownable {
     if (registry.isExpired(node)) {
       return (address(0), 0, "", address(0), address(0));
     }
-    AgentRecord storage a = agentRecords[node];
+    AgentRecord storage a = agentRecords[node][_ver(node)];
     return (a.registry, a.agentId, a.cardURI, a.payTo, a.payToken);
   }
 
@@ -528,7 +577,7 @@ contract DXResolver is Ownable {
     if (registry.isExpired(node)) {
       return (address(0), address(0));
     }
-    AgentRecord storage a = agentRecords[node];
+    AgentRecord storage a = agentRecords[node][_ver(node)];
     return (a.payTo, a.payToken);
   }
 
@@ -537,7 +586,7 @@ contract DXResolver is Ownable {
   ///         `node`에 에이전트 신원(비-0 registry)이 설정되고 미만료면 true.
   function hasAgent(bytes32 node) external view returns (bool) {
     if (registry.isExpired(node)) return false;
-    return agentRecords[node].registry != address(0);
+    return agentRecords[node][_ver(node)].registry != address(0);
   }
   
   // ════════════════════════════════════════════════════════════════════════
@@ -557,7 +606,7 @@ contract DXResolver is Ownable {
   ) external onlyTokenOwner(node) {
     require(contentType == 4, "Only JSON ABI supported");
     require(data.length > 0, "ABI data cannot be empty");
-    abiRecords[node][chainId][contentType] = data;
+    abiRecords[node][_ver(node)][chainId][contentType] = data;
     emit ABIChanged(node, chainId, contentType, data);
   }
   
@@ -573,14 +622,14 @@ contract DXResolver is Ownable {
     returns (uint256, bytes memory)
   {
     // 1. 해당 체인의 ABI 조회
-    bytes memory data = abiRecords[node][chainId][4];
+    bytes memory data = abiRecords[node][_ver(node)][chainId][4];
     if (data.length > 0) {
       return (4, data);
     }
     
     // 2. 없으면 generic ABI (chainId=0) 폴백
     if (chainId != 0) {
-      data = abiRecords[node][0][4];
+      data = abiRecords[node][_ver(node)][0][4];
       if (data.length > 0) {
         return (4, data);
       }

@@ -8,15 +8,15 @@
 
 | 컨트랙트 | 주소 | 역할 |
 |---|---|---|
-| **DXRegistrar** (NFT) | `0xc5D439c39b66FF81aDAd518ADa4Ba4C012eE98fD` | ERC-721 이름 NFT, 만료 관리 |
-| DXRegistry | `0x5e0b02ec270A31a6040B76c2cd3b0D5eA6282555` | 권한 루트 (소유권·리졸버 매핑) |
-| DXRegistrarController | `0xcDAA5f0b1AD56F9bAf87D6f9E6a154f0828db8a6` | 등록·갱신·결제·할인 진입점 |
-| DXResolver | `0x60639A64285C6F3F977132a25954D47E3938371D` | 주소·텍스트·콘텐츠·에이전트 해석 |
-| DXPriceOracle | `0x1882d078B730418e1817eCf309D30032B80A29d3` | USD→POL 가격 환산 (Chainlink) |
-| DXReverseRegistrar | `0x32382a26d1b6dd4389E90C8befd055645EE388A2` | 역방향 해석 (주소→이름) |
-| DXReservations | `0x08e130D338b45C6cdB1196f77a385eBf68519C33` | 예약 라벨 관리 |
+| **DXRegistrar** (NFT) | `0x1DaDBb206a05b2821935c467015C77fD61e02951` | ERC-721 이름 NFT, 만료 관리 |
+| DXRegistry | `0x0eE48aCcB768758Ba509Ef08D4f00d03C1B6e3A9` | 권한 루트 (소유권·리졸버 매핑) |
+| DXRegistrarController | `0xd456dC842B6c05084a0e884b7247F9ee90472432` | 등록·갱신·결제·할인 진입점 |
+| DXResolver | `0xb8b44561A52cf2929D3E6BF02d3B18a9e20CdE82` | 주소·텍스트·콘텐츠·에이전트 해석 |
+| DXPriceOracle | `0xc3751923bF9C485Ac927096D42469f6287156B42` | USD→POL 가격 환산 (Chainlink) |
+| DXReverseRegistrar | `0xb6b165eB79E1Acf54eE8acFAf5FCC77241D6Fef0` | 역방향 해석 (주소→이름) |
+| DXReservations | `0xfB22CE3135e8a0b6c91bb74884Ea73A4caa6b32b` | 예약 라벨 관리 |
 
-모든 컨트랙트는 PolygonScan + Sourcify에 소스 검증 완료. NFT는 OpenSea `https://opensea.io/assets/matic/0xc5D439c39b66FF81aDAd518ADa4Ba4C012eE98fD/{tokenId}` 에서 확인 (tokenId = `uint256(keccak256(label))`).
+모든 컨트랙트는 PolygonScan + Sourcify에 소스 검증 완료. NFT는 OpenSea `https://opensea.io/assets/matic/0x1DaDBb206a05b2821935c467015C77fD61e02951/{tokenId}` 에서 확인 (tokenId = `uint256(keccak256(label))`).
 
 가격 (USD, immutable): 1년 $8 / 3년 $18 / 5년 $25 / 10년 $40 / 15년 $55. 결제 시 Chainlink POL/USD 피드로 POL 환산. USDC/USDT 직접 결제도 지원.
 
@@ -64,9 +64,12 @@ DEXignation은 ENS 모델을 계승한 모듈형 구조입니다. 핵심 흐름:
 - `nameExpires(id)` — 만료 시각 조회
 - `tokenURI(id)` — 온체인 SVG 등급 카드 (base64 JSON). 만료 시 빨강, 아니면 등급 색
 - `burn(id)` — 만료+유예 경과한 이름 영구 소각 (누구나 가능, permissionless 정리)
-- `reclaim(id, owner)` — Registry 소유권 재설정
+- `reclaim(id, owner)` — Registry 소유권 수동 재설정 (v2에서는 전송이 자동 처리하므로 보통 불필요)
 - `addController/removeController` — 컨트롤러 관리 (onlyOwner)
 - `setGracePeriod` — 유예 기간 조정 (onlyOwner, 7~365일)
+
+**NFT 전송 동작 (v2 — 전송 안전성)**: NFT를 다른 주소로 전송하면 `_update` 훅이 자동으로 (1) Registry 소유권을 새 보유자로 이전하고 (2) Resolver 레코드를 버전 증가(`bumpVersion`)로 일괄 무효화한다(addr·text·contenthash·profile·abi·agent 6종 전부). 따라서 전송 직후 이름은 더 이상 이전 소유자 주소로 해석되지 않아 **오송금이 방지**되며, 새 소유자가 직접 레코드를 재설정해야 해석이 재개된다. 옛 레코드는 이전 버전 아래 체인에 남아 이력 추적이 가능하다. 단, 등록 과정의 controller→사용자 "배달" 전송(`controllers[from]`)은 무효화 대상에서 제외되어 등록 시 자동설정된 주소가 보존된다. mint(`from==0`)·burn(`to==0`)도 무효화하지 않는다.
+→ **참조 테스트**: `Transfer-Invalidation.test.ts` (제어권 이전·6종 무효화·해석 재개·이력), `Transfer-Edge.test.ts` (safeTransferFrom·승인 operator·연속 전송·권한 가드)
 
 **등급 규칙 (중요)**: 등급은 등록 시 구매 기간으로 설정, 갱신 시 더 길어지면 상향, 시간 경과로는 하향 안 됨. 만료 시에만 빨강 표시. 경계: `<=1년` charcoal, `<=3년` mud, `<=5년` orange, `<=10년` yellow, 그 이상(15년) gold.
 

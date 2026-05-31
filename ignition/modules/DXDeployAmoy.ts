@@ -63,7 +63,7 @@ export default buildModule("DXDeployAmoy", (m) => {
   // 예약 레지스트리 — Amoy에서 상표/프리미엄 플로우 테스트용.
   const reservations = m.contract("DXReservations", []);
 
-  m.call(registry, "setSubnodeOwner", [zeroHash, TLD_LABEL_HASH, registrar], {
+  const grantTld = m.call(registry, "setSubnodeOwner", [zeroHash, TLD_LABEL_HASH, registrar], {
     id: "GrantTldToRegistrar",
   });
   m.call(registry, "setSubnodeOwner", [zeroHash, REVERSE_LABEL_HASH, m.getAccount(0)], {
@@ -83,6 +83,13 @@ export default buildModule("DXDeployAmoy", (m) => {
     id: "AllowUSDT",
   });
   m.call(controller, "setReservations", [reservations], { id: "WireReservations" });
+
+  // v2: registrar ↔ resolver wiring for transfer-time record invalidation.
+  m.call(registrar, "setResolver", [resolver], {
+    id: "SetRegistrarResolver",
+    after: [grantTld],
+  });
+  m.call(resolver, "setRegistrar", [registrar], { id: "SetResolverRegistrar" });
 
   // NOTE: This module deploys only the core domain-service contracts.
   // Incentives for contributors are provided as .dex domain NFTs paid for

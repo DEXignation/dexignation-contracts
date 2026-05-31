@@ -56,7 +56,7 @@ export default buildModule("DXDeployPolygon", (m) => {
   // 메인넷의 상표/프리미엄 라벨 처리용 예약 레지스트리.
   const reservations = m.contract("DXReservations", []);
 
-  m.call(registry, "setSubnodeOwner", [zeroHash, TLD_LABEL_HASH, registrar], {
+  const grantTld = m.call(registry, "setSubnodeOwner", [zeroHash, TLD_LABEL_HASH, registrar], {
     id: "GrantTldToRegistrar",
   });
   m.call(registry, "setSubnodeOwner", [zeroHash, REVERSE_LABEL_HASH, m.getAccount(0)], {
@@ -76,6 +76,13 @@ export default buildModule("DXDeployPolygon", (m) => {
     id: "AllowUSDT",
   });
   m.call(controller, "setReservations", [reservations], { id: "WireReservations" });
+
+  // v2: registrar ↔ resolver wiring for transfer-time record invalidation.
+  m.call(registrar, "setResolver", [resolver], {
+    id: "SetRegistrarResolver",
+    after: [grantTld],
+  });
+  m.call(resolver, "setRegistrar", [registrar], { id: "SetResolverRegistrar" });
 
   // setDiscountToken is left disabled by default. The owner activates it
   // once a partner/community token (e.g. MOL on Polygon) is chosen.

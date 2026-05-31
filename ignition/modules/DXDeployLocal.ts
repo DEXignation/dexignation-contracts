@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: MIT
 //
 // Ignition module — local deployment with Mock dependencies.
-// Useful for hardhat node + integration testing of the full payment flow.
-//
 // 로컬 배포 모듈. Mock 의존성을 함께 배포하여 결제 플로우 전체를 시험할 수 있다.
 
 import { buildModule } from "@nomicfoundation/hardhat-ignition/modules";
@@ -47,12 +45,10 @@ export default buildModule("DXDeployLocal", (m) => {
   const controller = m.contract("DXRegistrarController", [registrar, registry, priceOracle]);
 
   // ── Optional add-ons ──────────────────────────────────────────────────────
-  // Reservation registry — owner-managed reserved label list.
-  //   예약 레지스트리 — 오너 관리 예약 라벨.
   const reservations = m.contract("DXReservations", []);
 
   // ── Wiring ────────────────────────────────────────────────────────────────
-  m.call(registry, "setSubnodeOwner", [zeroHash, TLD_LABEL_HASH, registrar], {
+  const grantTld = m.call(registry, "setSubnodeOwner", [zeroHash, TLD_LABEL_HASH, registrar], {
     id: "GrantTldToRegistrar",
   });
   m.call(registry, "setSubnodeOwner", [zeroHash, REVERSE_LABEL_HASH, m.getAccount(0)], {
@@ -67,9 +63,16 @@ export default buildModule("DXDeployLocal", (m) => {
   m.call(controller, "setAllowedPaymentToken", [mockUsdt, true], { id: "AllowUSDT" });
   m.call(controller, "setReservations", [reservations], { id: "WireReservations" });
 
-  // setDiscountToken is intentionally NOT called here. The owner activates
-  // it after deciding which token to honour (MOL on Polygon, or none).
-  //   할인 토큰 활성화는 owner가 토큰을 정한 뒤 별도 호출.
+  // ── v2: registrar ↔ resolver wiring for transfer-time record invalidation ──
+  // setResolver: registrar stores the resolver (registry baseNode resolver +
+  //   local recordResolver) so _update can bump record versions on transfer.
+  // setRegistrar: resolver authorises the registrar to call bumpVersion.
+  //   전송 시 레코드 무효화를 위해 registrar↔resolver를 상호 연결.
+  m.call(registrar, "setResolver", [resolver], {
+    id: "SetRegistrarResolver",
+    after: [grantTld],
+  });
+  m.call(resolver, "setRegistrar", [registrar], { id: "SetResolverRegistrar" });
 
   return {
     registry,

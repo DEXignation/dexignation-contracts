@@ -24,13 +24,13 @@ Live on **Polygon Mainnet** (chainId 137). 142 unit tests passing, full end-to-e
 
 | Contract | Address |
 |---|---|
-| DXRegistrar (NFT) | `0xc5D439c39b66FF81aDAd518ADa4Ba4C012eE98fD` |
-| DXRegistry | `0x5e0b02ec270A31a6040B76c2cd3b0D5eA6282555` |
-| DXRegistrarController | `0xcDAA5f0b1AD56F9bAf87D6f9E6a154f0828db8a6` |
-| DXResolver | `0x60639A64285C6F3F977132a25954D47E3938371D` |
-| DXPriceOracle | `0x1882d078B730418e1817eCf309D30032B80A29d3` |
-| DXReverseRegistrar | `0x32382a26d1b6dd4389E90C8befd055645EE388A2` |
-| DXReservations | `0x08e130D338b45C6cdB1196f77a385eBf68519C33` |
+| DXRegistrar (NFT) | `0x1DaDBb206a05b2821935c467015C77fD61e02951` |
+| DXRegistry | `0x0eE48aCcB768758Ba509Ef08D4f00d03C1B6e3A9` |
+| DXRegistrarController | `0xd456dC842B6c05084a0e884b7247F9ee90472432` |
+| DXResolver | `0xb8b44561A52cf2929D3E6BF02d3B18a9e20CdE82` |
+| DXPriceOracle | `0xc3751923bF9C485Ac927096D42469f6287156B42` |
+| DXReverseRegistrar | `0xb6b165eB79E1Acf54eE8acFAf5FCC77241D6Fef0` |
+| DXReservations | `0xfB22CE3135e8a0b6c91bb74884Ea73A4caa6b32b` |
 
 ## Features
 

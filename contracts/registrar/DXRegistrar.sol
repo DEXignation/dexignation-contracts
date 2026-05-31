@@ -54,6 +54,12 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import {IDXRegistrar} from "./IDXRegistrar.sol";
 import {IDXRegistry} from "../registry/IDXRegistry.sol";
 
+/// @dev Minimal interface to invalidate resolver records on transfer.
+///      전송 시 리졸버 레코드를 무효화하기 위한 최소 인터페이스.
+interface IResolverVersion {
+  function bumpVersion(bytes32 node) external;
+}
+
 /// @title  DXRegistrar
 /// @notice Issues 2LD names under a given TLD (`.dex`) as ERC-721 tokens.
 ///         Lifecycle (register / renew / expiry / grace) is enforced here.
@@ -75,6 +81,14 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
   /// @notice Human-readable form of the TLD (e.g. "dex").
   ///         TLD의 사람이 읽을 수 있는 형태.
   string public baseNodeName;
+
+  /// @notice Resolver used for record invalidation on transfer (v2).
+  ///         Set via `setResolver`. When non-zero, every real NFT transfer
+  ///         bumps the node's record version, invalidating stale records.
+  ///         전송 시 레코드 무효화에 사용하는 리졸버(v2). setResolver로 설정.
+  ///         0이 아니면 실제 NFT 전송마다 노드 레코드 버전을 올려 기존
+  ///         레코드를 무효화한다.
+  IResolverVersion public recordResolver;
 
   /// @dev tokenId (== labelhash as uint256) => expiry timestamp.
   ///      tokenId에 대응하는 도메인의 만료 시각.
@@ -202,6 +216,9 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
   /// @inheritdoc IDXRegistrar
   function setResolver(address resolver) external override onlyOwner {
     registry.setResolver(baseNode, resolver);
+    // v2: keep a local reference so transfers can invalidate stale records.
+    //     전송 시 레코드 무효화를 위해 로컬 참조도 보관.
+    recordResolver = IResolverVersion(resolver);
   }
 
   /// @inheritdoc IDXRegistrar
@@ -392,6 +409,53 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
       revert TokenExpired(tokenId);
     }
     return super.ownerOf(tokenId);
+  }
+
+  /// @notice Transfer hook (v2). On a real ownership transfer (not mint/burn),
+  ///         atomically (1) move registry control to the new holder and
+  ///         (2) invalidate the node's resolver records so they no longer
+  ///         point at the previous owner. Prevents funds being sent to the
+  ///         former owner after a name changes hands. Mint (from==0) and burn
+  ///         (to==0) are skipped — registration sets control/records itself,
+  ///         and burn intentionally leaves history.
+  ///         전송 훅(v2). 실제 소유권 이전(민트·소각 제외) 시 (1) registry
+  ///         제어권을 새 보유자로 옮기고 (2) 노드의 리졸버 레코드를 무효화하여
+  ///         더는 이전 소유자를 가리키지 않게 한다. 이름 양도 후 이전 소유자에게
+  ///         자금이 가는 것을 방지한다.
+  function _update(
+    address to,
+    uint256 tokenId,
+    address auth
+  ) internal override returns (address) {
+    address from = super._update(to, tokenId, auth);
+
+    // Only real transfers (skip mint: from==0, and burn: to==0).
+    // ALSO skip transfers originating from a controller: those are the final
+    // "delivery" leg of registration (controller mints to itself, sets the
+    // initial resolver record, then transfers to the real owner). Invalidating
+    // there would wipe the freshly-set address record. Only genuine
+    // user-to-user secondary transfers should invalidate records.
+    //   실제 전송만 처리 (mint·burn 제외). 추가로 controller에서 나가는 전송도
+    //   제외한다 — 이는 등록의 마지막 "배달" 단계(controller가 자기에게 mint해
+    //   초기 레코드를 설정한 뒤 실제 소유자에게 transfer)이므로, 여기서
+    //   무효화하면 방금 설정한 주소 레코드가 지워진다. 유저 간 2차 전송만
+    //   무효화한다.
+    if (from != address(0) && to != address(0) && !controllers[from]) {
+      bytes32 node = keccak256(abi.encodePacked(baseNode, bytes32(tokenId)));
+
+      // (1) Move registry control to the new token holder.
+      //     registry 제어권을 새 보유자로 이전.
+      registry.setSubnodeOwner(baseNode, bytes32(tokenId), to);
+
+      // (2) Invalidate stale resolver records (addr/text/contenthash/
+      //     profile/abi/agent) in O(1) via version bump. Old records remain
+      //     on chain under the previous version for history.
+      //     리졸버 레코드를 버전 증가로 일괄 무효화. 옛 레코드는 이력으로 보존.
+      if (address(recordResolver) != address(0)) {
+        recordResolver.bumpVersion(node);
+      }
+    }
+    return from;
   }
 
   /// @notice Fully on-chain NFT metadata. Returns a `data:` URI containing

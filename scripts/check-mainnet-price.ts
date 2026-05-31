@@ -1,6 +1,6 @@
 import { network } from "hardhat";
 import { formatEther } from "viem";
-const CONTROLLER = "0xcDAA5f0b1AD56F9bAf87D6f9E6a154f0828db8a6";
+const CONTROLLER = "0xd456dC842B6c05084a0e884b7247F9ee90472432";
 const YEAR = 365n*24n*60n*60n;
 async function main(){
   const { viem } = await network.connect();
