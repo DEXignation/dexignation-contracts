@@ -61,6 +61,17 @@ interface IDXRegistryMinimal {
   ) external;
 }
 
+/// @dev Minimal balance interface shared by ERC-20 and ERC-721/SBT. Both expose
+///      `balanceOf(address) returns (uint256)`, so a single interface gates on
+///      either: for ERC-20 the threshold is a token amount; for an SBT the
+///      threshold is a badge count (typically 1).
+///      ERC-20과 ERC-721/SBT가 공유하는 최소 잔액 인터페이스. 둘 다
+///      `balanceOf(address)`를 노출하므로 하나의 인터페이스로 게이팅:
+///      ERC-20은 임계치가 토큰 수량, SBT는 배지 개수(보통 1).
+interface IGateBalance {
+  function balanceOf(address account) external view returns (uint256);
+}
+
 contract DXSubnameRegistrar is Ownable, ReentrancyGuard {
   // ──────────────────────────────────────────────────────────────────────────
   // Immutable wiring / 불변 연결
@@ -109,6 +120,20 @@ contract DXSubnameRegistrar is Ownable, ReentrancyGuard {
   ///         구매된 서브네임에 부여되는 기간(초).
   mapping(bytes32 parentNode => uint256) public subnameDuration;
 
+  /// @notice Optional access gate per parent: buyers must hold at least
+  ///         `gateThreshold` of `gateToken` to register a subname. Works for
+  ///         both ERC-20 (amount) and ERC-721/SBT (badge count). zero address
+  ///         = no gate (anyone may buy).
+  ///         부모별 선택적 접근 게이트: 구매자는 `gateToken`을 `gateThreshold`
+  ///         이상 보유해야 서브네임 등록 가능. ERC-20(수량)·ERC-721/SBT(개수)
+  ///         모두 동작. zero address면 게이트 없음(누구나 구매).
+  mapping(bytes32 parentNode => address) public gateToken;
+
+  /// @notice Minimum balance of `gateToken` a buyer must hold. For an SBT,
+  ///         set this to 1 (hold at least one badge).
+  ///         구매자가 보유해야 할 `gateToken` 최소량. SBT는 1로 설정(배지 1개+).
+  mapping(bytes32 parentNode => uint256) public gateThreshold;
+
   // ──────────────────────────────────────────────────────────────────────────
   // Events / 이벤트
   // ──────────────────────────────────────────────────────────────────────────
@@ -121,6 +146,11 @@ contract DXSubnameRegistrar is Ownable, ReentrancyGuard {
     uint256 price,
     uint256 duration,
     bool enabled
+  );
+  event SubnameGateConfigured(
+    bytes32 indexed parentNode,
+    address indexed gateToken,
+    uint256 gateThreshold
   );
   event SubnameRegistered(
     bytes32 indexed parentNode,
@@ -141,6 +171,7 @@ contract DXSubnameRegistrar is Ownable, ReentrancyGuard {
   error ModuleNotApproved(bytes32 parentNode, address parentOwner);
   error IncorrectPayment(uint256 sent, uint256 required);
   error EmptyLabel();
+  error GateNotMet(bytes32 parentNode, address gateToken, uint256 required, uint256 held);
   error FeeTooHigh(uint256 requested, uint256 max);
   error ZeroAddress();
   error NativeTransferFailed(address to);
@@ -213,6 +244,31 @@ contract DXSubnameRegistrar is Ownable, ReentrancyGuard {
     emit SubnameConfigured(parentNode, price, duration, enabled);
   }
 
+  /// @notice Set (or clear) the access gate for `parentNode`. Buyers must hold
+  ///         at least `threshold` of `token` to register a subname. Pass
+  ///         `token = address(0)` to remove the gate. Only the parent owner.
+  ///         For an SBT/ERC-721 gate, set `threshold = 1`. For an ERC-20 gate,
+  ///         set `threshold` to the required token amount (in token units).
+  ///         `parentNode`의 접근 게이트 설정/해제. 구매자는 `token`을
+  ///         `threshold` 이상 보유해야 등록 가능. `token = address(0)`이면
+  ///         게이트 해제. 부모 소유자만. SBT/ERC-721은 `threshold = 1`,
+  ///         ERC-20은 필요한 토큰 수량으로 설정.
+  function setSubnameGate(
+    bytes32 parentNode,
+    address token,
+    uint256 threshold
+  ) external {
+    _requireParentOwner(parentNode);
+    if (token == address(0)) {
+      gateToken[parentNode] = address(0);
+      gateThreshold[parentNode] = 0;
+    } else {
+      gateToken[parentNode] = token;
+      gateThreshold[parentNode] = threshold;
+    }
+    emit SubnameGateConfigured(parentNode, gateToken[parentNode], gateThreshold[parentNode]);
+  }
+
   // ──────────────────────────────────────────────────────────────────────────
   // Buyer flow / 구매자 흐름
   // ──────────────────────────────────────────────────────────────────────────
@@ -246,6 +302,19 @@ contract DXSubnameRegistrar is Ownable, ReentrancyGuard {
 
     uint256 price = subnamePrice[parentNode];
     if (msg.value != price) revert IncorrectPayment(msg.value, price);
+
+    // Access gate: if the parent set a gate token, the buyer must hold at
+    // least the threshold. Works for ERC-20 (amount) and SBT/ERC-721 (count).
+    //   접근 게이트: 부모가 게이트 토큰을 설정했으면 구매자는 임계치 이상
+    //   보유해야 한다. ERC-20(수량)·SBT/ERC-721(개수) 모두 동작.
+    address gate = gateToken[parentNode];
+    if (gate != address(0)) {
+      uint256 held = IGateBalance(gate).balanceOf(msg.sender);
+      uint256 required = gateThreshold[parentNode];
+      if (held < required) {
+        revert GateNotMet(parentNode, gate, required, held);
+      }
+    }
 
     // Compute split. protocolFee is bounded by MAX_FEE_BPS (<=20%), so
     // ownerProceeds is always non-negative.
@@ -303,6 +372,17 @@ contract DXSubnameRegistrar is Ownable, ReentrancyGuard {
     if (registry.isExpired(parentNode)) return false;
     address parentOwner = registry.owner(parentNode);
     return registry.isApprovedForAll(parentOwner, address(this));
+  }
+
+  /// @notice True if `buyer` meets the access gate for `parentNode` (always
+  ///         true when no gate is set). Pairs with `isPurchasable` for UIs:
+  ///         a buyer can register iff `isPurchasable && meetsGate`.
+  ///         `buyer`가 `parentNode`의 접근 게이트를 충족하는지(게이트 미설정 시
+  ///         항상 true). UI에선 `isPurchasable && meetsGate`면 등록 가능.
+  function meetsGate(bytes32 parentNode, address buyer) external view returns (bool) {
+    address gate = gateToken[parentNode];
+    if (gate == address(0)) return true;
+    return IGateBalance(gate).balanceOf(buyer) >= gateThreshold[parentNode];
   }
 
   // ──────────────────────────────────────────────────────────────────────────

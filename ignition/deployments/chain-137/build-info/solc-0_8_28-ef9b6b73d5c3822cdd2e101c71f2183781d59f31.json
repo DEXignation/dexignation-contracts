@@ -1,6 +1,6 @@
 {
   "_format": "hh3-sol-build-info-1",
-  "id": "solc-0_8_28-2afd6634b065a279b69aac02693a9a1e4b0d9720",
+  "id": "solc-0_8_28-ef9b6b73d5c3822cdd2e101c71f2183781d59f31",
   "solcVersion": "0.8.28",
   "solcLongVersion": "0.8.28+commit.7893614a",
   "compilerType": "solc",
@@ -38,7 +38,8 @@
           ]
         }
       },
-      "remappings": []
+      "remappings": [],
+      "viaIR": true
     },
     "sources": {
       "project/contracts/registry/DXRegistry.sol": {

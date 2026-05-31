@@ -1,6 +1,6 @@
 {
   "_format": "hh3-sol-build-info-1",
-  "id": "solc-0_8_28-5278fbdd4db972bb39109344d856acb5765b8c02",
+  "id": "solc-0_8_28-8dfa1ce5551b45b948f9e3ed0c3ad951554d0368",
   "solcVersion": "0.8.28",
   "solcLongVersion": "0.8.28+commit.7893614a",
   "compilerType": "solc",
@@ -40,7 +40,8 @@
       },
       "remappings": [
         "project/:@openzeppelin/contracts/=npm/@openzeppelin/contracts@5.6.1/"
-      ]
+      ],
+      "viaIR": true
     },
     "sources": {
       "npm/@openzeppelin/contracts@5.6.1/access/Ownable.sol": {
