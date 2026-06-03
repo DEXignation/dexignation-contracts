@@ -21,6 +21,7 @@ pragma solidity ^0.8.28;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 import {EVMCoinUtils, COIN_TYPE_DEFAULT, COIN_TYPE_ETH} from "../utils/EVMCoinUtils.sol";
+import {DXNamehash} from "../utils/DXNamehash.sol";
 
 interface IDXRegistry {
   function owner(bytes32 node) external view returns (address);
@@ -121,6 +122,9 @@ contract DXResolver is Ownable {
   // node => version => agent record (versioned for transfer invalidation)
   mapping(bytes32 => mapping(uint64 => AgentRecord)) private agentRecords;
 
+  // Reverse resolution (EIP-181): `{addr}.addr.reverse` → forward name
+  mapping(bytes32 => string) internal names;
+
   // ── Custom errors ──────────────────────────────────────────────────────
   error ContenthashTooLong(uint256 length, uint256 maxLength);
   error TextKeyTooLong(uint256 length, uint256 maxLength);
@@ -150,6 +154,7 @@ contract DXResolver is Ownable {
   );
   event LanguageSupportAdded(string langCode);
   event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+  event NameChanged(bytes32 indexed node, string name);
   
   // ════════════════════════════════════════════════════════════════════════
   // MODIFIERS
@@ -341,6 +346,49 @@ contract DXResolver is Ownable {
     returns (bytes memory)
   {
     return addresses[node][_ver(node)][coinType];
+  }
+
+  /// @notice Set the forward name for a reverse node (`{addr}.addr.reverse`).
+  ///         빈 문자열을 전달하면 역방향 이름을 제거한다.
+  function setName(bytes32 node, string calldata newName)
+    external
+    onlyTokenOwner(node)
+  {
+    bytes32 forwardNode = DXNamehash.namehash(newName);
+    if (registry.isExpired(forwardNode)) {
+      revert("Forward node is expired");
+    }
+
+    if (registry.owner(forwardNode) != registry.owner(node)) {
+      revert("Not authorized");
+    }
+
+    if (bytes(newName).length == 0) {
+      delete names[node];
+      emit NameChanged(node, "");
+      return;
+    }
+
+    names[node] = newName;
+    emit NameChanged(node, newName);
+  }
+
+  /// @notice Read reverse name with forward-owner verification at read time.
+  ///         미설정·만료·정방향/역방향 소유자 불일치 시 빈 문자열 반환.
+  function name(bytes32 node) external view returns (string memory) {
+    string memory stored = names[node];
+    if (bytes(stored).length == 0) {
+      return stored;
+    }
+
+    bytes32 forwardNode = DXNamehash.namehash(stored);
+    address reverseOwner = registry.owner(node);
+
+    if (registry.isExpired(forwardNode) ||
+        registry.owner(forwardNode) != reverseOwner) {
+      return "";
+    }
+    return stored;
   }
   
   // ════════════════════════════════════════════════════════════════════════
@@ -621,6 +669,11 @@ contract DXResolver is Ownable {
     view
     returns (uint256, bytes memory)
   {
+    // EIP-205: contentTypes is a bitmask; only JSON (4) is stored
+    if ((contentTypes & 4) == 0) {
+      return (0, "");
+    }
+
     // 1. 해당 체인의 ABI 조회
     bytes memory data = abiRecords[node][_ver(node)][chainId][4];
     if (data.length > 0) {
