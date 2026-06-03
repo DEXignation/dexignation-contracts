@@ -60,6 +60,12 @@ interface IResolverVersion {
   function bumpVersion(bytes32 node) external;
 }
 
+/// @dev Minimal interface to query listing state from the marketplace.
+///      마켓플레이스에서 리스팅 상태를 조회하기 위한 최소 인터페이스.
+interface IDXMarketplaceView {
+  function isListed(uint256 tokenId) external view returns (bool);
+}
+
 /// @title  DXRegistrar
 /// @notice Issues 2LD names under a given TLD (`.dex`) as ERC-721 tokens.
 ///         Lifecycle (register / renew / expiry / grace) is enforced here.
@@ -89,6 +95,19 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
   ///         0이 아니면 실제 NFT 전송마다 노드 레코드 버전을 올려 기존
   ///         레코드를 무효화한다.
   IResolverVersion public recordResolver;
+
+  /// @notice Marketplace used only to derive the "for sale" mark in tokenURI.
+  ///         Set via `setMarketplace`. When non-zero, tokenURI queries
+  ///         `isListed(tokenId)` and adds a LISTED mark to the SVG.
+  ///         Querying is wrapped in try/catch so a paused/replaced marketplace
+  ///         never breaks tokenURI rendering.
+  ///         tokenURI에서 "판매중" 마크를 파생하기 위해서만 사용하는 마켓플레이스.
+  ///         `setMarketplace`로 설정. 0이 아니면 tokenURI가 `isListed(tokenId)`를
+  ///         조회해 SVG에 LISTED 마크를 추가한다. 조회는 try/catch로 감싸므로
+  ///         마켓이 멈추거나 교체돼도 tokenURI 렌더링이 깨지지 않는다.
+  IDXMarketplaceView public marketplace;
+
+  event MarketplaceUpdated(address indexed marketplace);
 
   /// @dev tokenId (== labelhash as uint256) => expiry timestamp.
   ///      tokenId에 대응하는 도메인의 만료 시각.
@@ -180,6 +199,34 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     
     gracePeriod = _newGracePeriod;
     emit GracePeriodUpdated(_newGracePeriod);
+  }
+
+  /// @notice Set (or clear) the marketplace used for the LISTED mark.
+  ///         Owner-only. Pass address(0) to disable the mark entirely.
+  ///         This is purely cosmetic wiring — it grants the marketplace NO
+  ///         power over tokens; transfers still require the seller's own
+  ///         per-token approval on the ERC-721.
+  ///         LISTED 마크용 마켓플레이스 설정/해제. 오너 전용. address(0)이면
+  ///         마크 비활성. 이것은 순수 표시용 연결일 뿐 — 마켓에 토큰 권한을
+  ///         전혀 주지 않으며, 이전은 여전히 판매자가 ERC-721에 직접 건
+  ///         토큰별 approve를 필요로 한다.
+  function setMarketplace(address _marketplace) external onlyOwner {
+    marketplace = IDXMarketplaceView(_marketplace);
+    emit MarketplaceUpdated(_marketplace);
+  }
+
+  /// @dev Returns true if `tokenId` is currently listed on the marketplace.
+  ///      Wrapped in try/catch: a paused/replaced/reverting marketplace simply
+  ///      yields "not listed" rather than breaking tokenURI.
+  ///      `tokenId`가 현재 마켓에 리스팅됐으면 true. try/catch로 감싸 마켓이
+  ///      멈추거나 교체되거나 revert해도 tokenURI를 깨뜨리지 않고 "미리스팅"으로 처리.
+  function _isForSale(uint256 tokenId) internal view returns (bool) {
+    if (address(marketplace) == address(0)) return false;
+    try marketplace.isListed(tokenId) returns (bool listed) {
+      return listed;
+    } catch {
+      return false;
+    }
   }
 
   /// @dev Reverts unless this contract currently owns the TLD node in the
@@ -484,7 +531,8 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     bool expired = expiries[tokenId] <= block.timestamp;
     uint8 tier = highestTier[tokenId];
 
-    string memory svg = _generateSVG(label, dotTld, tier, expired);
+    bool forSale = _isForSale(tokenId);
+    string memory svg = _generateSVG(label, dotTld, tier, expired, forSale);
     string memory tierName = _tierNameOf(tier, expired);
 
     string memory json = string.concat(
@@ -588,14 +636,22 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     }
   }
 
-  /// @dev Generate the hexagonal SVG card. Pure: same (label, tier, expired)
-  ///      always yields the same art.
-  ///      육각형 SVG 카드 생성. pure: 같은 (label, tier, expired)은 항상 같은 아트.
+  /// @dev Generate the hexagonal SVG card. Pure: same (label, tier, expired,
+  ///      forSale) always yields the same art. When `forSale` is true, a
+  ///      "LISTED" label is overlaid near the bottom of the card. The mark is a
+  ///      boolean overlay only — the sale PRICE is intentionally NOT rendered
+  ///      on-chain (it is shown by the marketplace site), so a price change
+  ///      never requires SVG regeneration.
+  ///      육각형 SVG 카드 생성. pure: 같은 (label, tier, expired, forSale)은 항상
+  ///      같은 아트. `forSale`이 true면 카드 하단에 "LISTED" 라벨을 오버레이.
+  ///      마크는 불리언 오버레이일 뿐 — 판매 가격은 의도적으로 온체인에 그리지
+  ///      않는다(마켓 사이트가 표시). 따라서 가격 변경에 SVG 재생성 불필요.
   function _generateSVG(
     string memory label,
     string memory dotTld,
     uint8 tier,
-    bool expired
+    bool expired,
+    bool forSale
   ) internal pure returns (string memory) {
     (
       string memory c0,
@@ -634,7 +690,30 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
 
     string memory body = _nameSvg(label, dotTld, textColor);
 
-    return string.concat(head, frame, body, "</svg>");
+    // LISTED label overlay (only when listed). Kept as a separate concat so a
+    // non-listed token's art is byte-identical to the pre-marketplace version.
+    //   LISTED 라벨 오버레이(리스팅 시에만). 별도 concat으로 두어, 미리스팅
+    //   토큰의 아트는 마켓 도입 이전 버전과 바이트 단위로 동일하다.
+    string memory mark = forSale ? _saleMark() : "";
+
+    return string.concat(head, frame, body, mark, "</svg>");
+  }
+
+  /// @dev The "for sale" mark overlay: a restrained "LISTED" label in mint
+  ///      monospace near the bottom of the hex card. It does NOT cover the name
+  ///      or alter the tier-colored border, and shows NO price (only the boolean
+  ///      state — the marketplace site shows the price). To change the mark
+  ///      design later, edit ONLY this function.
+  ///      "판매중" 마크 오버레이: 육각 카드 하단의 절제된 민트 모노스페이스
+  ///      "LISTED" 라벨. 이름을 가리거나 등급 테두리를 바꾸지 않으며, 가격은
+  ///      표시하지 않는다(불리언 상태만; 가격은 마켓 사이트가 표시). 나중에
+  ///      마크 디자인을 바꾸려면 이 함수만 수정.
+  function _saleMark() internal pure returns (string memory) {
+    return string.concat(
+      '<text x="200" y="330" text-anchor="middle" font-family="monospace" '
+      'font-weight="400" font-size="15" fill="#00DC82" letter-spacing="2">'
+      'LISTED</text>'
+    );
   }
 
   /// @dev Render the name (wrapped, full) + the .dex suffix as SVG <text>.
