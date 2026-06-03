@@ -66,6 +66,12 @@ interface IDXMarketplaceView {
   function isListed(uint256 tokenId) external view returns (bool);
 }
 
+/// @dev Minimal interface to query auction state (English or Dutch).
+///      경매(영국식/네덜란드식) 진행 상태 조회용 최소 인터페이스.
+interface IDXAuctionView {
+  function isOnAuction(uint256 tokenId) external view returns (bool);
+}
+
 /// @title  DXRegistrar
 /// @notice Issues 2LD names under a given TLD (`.dex`) as ERC-721 tokens.
 ///         Lifecycle (register / renew / expiry / grace) is enforced here.
@@ -106,6 +112,19 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
   ///         조회해 SVG에 LISTED 마크를 추가한다. 조회는 try/catch로 감싸므로
   ///         마켓이 멈추거나 교체돼도 tokenURI 렌더링이 깨지지 않는다.
   IDXMarketplaceView public marketplace;
+
+  /// @notice English/Dutch auction contracts. When non-zero, tokenURI queries
+  ///         `isOnAuction(tokenId)` and shows an AUCTION mark. Set via
+  ///         `setAuctions`. Cosmetic only — grants the auctions NO transfer
+  ///         rights. Wrapped in try/catch like the marketplace lookup.
+  ///         영국식/네덜란드식 경매 컨트랙트. 0이 아니면 tokenURI가
+  ///         `isOnAuction(tokenId)`를 조회해 AUCTION 마크를 표시한다.
+  ///         `setAuctions`로 설정. 표시 전용 — 경매에 이전 권한을 주지 않음.
+  ///         마켓 조회처럼 try/catch로 감쌈.
+  IDXAuctionView public englishAuction;
+  IDXAuctionView public dutchAuction;
+
+  event AuctionsUpdated(address indexed english, address indexed dutch);
 
   event MarketplaceUpdated(address indexed marketplace);
 
@@ -215,18 +234,47 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     emit MarketplaceUpdated(_marketplace);
   }
 
-  /// @dev Returns true if `tokenId` is currently listed on the marketplace.
-  ///      Wrapped in try/catch: a paused/replaced/reverting marketplace simply
-  ///      yields "not listed" rather than breaking tokenURI.
-  ///      `tokenId`가 현재 마켓에 리스팅됐으면 true. try/catch로 감싸 마켓이
-  ///      멈추거나 교체되거나 revert해도 tokenURI를 깨뜨리지 않고 "미리스팅"으로 처리.
-  function _isForSale(uint256 tokenId) internal view returns (bool) {
-    if (address(marketplace) == address(0)) return false;
-    try marketplace.isListed(tokenId) returns (bool listed) {
-      return listed;
-    } catch {
-      return false;
+  /// @notice Set (or clear) the auction contracts used for the AUCTION mark.
+  ///         Owner-only. Pass address(0) for either to disable that lookup.
+  ///         Cosmetic wiring only — grants the auctions NO transfer rights.
+  ///         AUCTION 마크용 경매 컨트랙트 설정/해제. 오너 전용. 0이면 해당 조회
+  ///         비활성. 표시 전용 — 경매에 이전 권한을 주지 않음.
+  function setAuctions(address _english, address _dutch) external onlyOwner {
+    englishAuction = IDXAuctionView(_english);
+    dutchAuction = IDXAuctionView(_dutch);
+    emit AuctionsUpdated(_english, _dutch);
+  }
+
+  /// @dev Sale-state for the SVG mark, mutually exclusive by construction:
+  ///        0 = none, 1 = LISTED (fixed-price), 2 = AUCTION (English or Dutch).
+  ///      A name can be in only one sale path at a time (enforced by the
+  ///      marketplace/auction contracts via single-token approval + cross
+  ///      checks), so at most one mark ever shows. Listing is checked first;
+  ///      if not listed, the two auctions are checked. All lookups are wrapped
+  ///      in try/catch so a paused/replaced/reverting contract never breaks
+  ///      metadata rendering.
+  ///      SVG 마크용 판매 상태(구조상 상호 배타): 0=없음, 1=LISTED(고정가),
+  ///      2=AUCTION(영국식/네덜란드식). 한 이름은 한 번에 하나의 판매 경로에만
+  ///      있으므로(단일 토큰 approve + 상호 검사로 강제) 마크는 최대 하나만 표시.
+  ///      리스팅을 먼저 확인하고, 아니면 두 경매를 확인. 모든 조회는 try/catch로
+  ///      감싸 멈추거나 교체·revert돼도 메타데이터 렌더링이 깨지지 않는다.
+  function _saleState(uint256 tokenId) internal view returns (uint8) {
+    if (address(marketplace) != address(0)) {
+      try marketplace.isListed(tokenId) returns (bool listed) {
+        if (listed) return 1; // LISTED
+      } catch { /* ignore */ }
     }
+    if (address(englishAuction) != address(0)) {
+      try englishAuction.isOnAuction(tokenId) returns (bool on) {
+        if (on) return 2; // AUCTION
+      } catch { /* ignore */ }
+    }
+    if (address(dutchAuction) != address(0)) {
+      try dutchAuction.isOnAuction(tokenId) returns (bool on) {
+        if (on) return 2; // AUCTION
+      } catch { /* ignore */ }
+    }
+    return 0; // none
   }
 
   /// @dev Reverts unless this contract currently owns the TLD node in the
@@ -531,8 +579,8 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     bool expired = expiries[tokenId] <= block.timestamp;
     uint8 tier = highestTier[tokenId];
 
-    bool forSale = _isForSale(tokenId);
-    string memory svg = _generateSVG(label, dotTld, tier, expired, forSale);
+    uint8 saleState = _saleState(tokenId);
+    string memory svg = _generateSVG(label, dotTld, tier, expired, saleState);
     string memory tierName = _tierNameOf(tier, expired);
 
     string memory json = string.concat(
@@ -637,13 +685,11 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
   }
 
   /// @dev Generate the hexagonal SVG card. Pure: same (label, tier, expired,
-  ///      forSale) always yields the same art. When `forSale` is true, a
-  ///      "LISTED" label is overlaid near the bottom of the card. The mark is a
-  ///      boolean overlay only — the sale PRICE is intentionally NOT rendered
-  ///      on-chain (it is shown by the marketplace site), so a price change
-  ///      never requires SVG regeneration.
-  ///      육각형 SVG 카드 생성. pure: 같은 (label, tier, expired, forSale)은 항상
-  ///      같은 아트. `forSale`이 true면 카드 하단에 "LISTED" 라벨을 오버레이.
+  ///      saleState) always yields the same art. saleState 1 overlays a LISTED
+  ///      label, 2 overlays an AUCTION label (mutually exclusive), 0 none.
+  ///      육각형 SVG 카드 생성. pure: 같은 (label, tier, expired, saleState)은
+  ///      항상 같은 아트. saleState 1이면 LISTED, 2면 AUCTION 라벨을 하단에
+  ///      오버레이(상호 배타), 0이면 없음.
   ///      마크는 불리언 오버레이일 뿐 — 판매 가격은 의도적으로 온체인에 그리지
   ///      않는다(마켓 사이트가 표시). 따라서 가격 변경에 SVG 재생성 불필요.
   function _generateSVG(
@@ -651,7 +697,7 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     string memory dotTld,
     uint8 tier,
     bool expired,
-    bool forSale
+    uint8 saleState
   ) internal pure returns (string memory) {
     (
       string memory c0,
@@ -690,30 +736,46 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
 
     string memory body = _nameSvg(label, dotTld, textColor);
 
-    // LISTED label overlay (only when listed). Kept as a separate concat so a
-    // non-listed token's art is byte-identical to the pre-marketplace version.
-    //   LISTED 라벨 오버레이(리스팅 시에만). 별도 concat으로 두어, 미리스팅
-    //   토큰의 아트는 마켓 도입 이전 버전과 바이트 단위로 동일하다.
-    string memory mark = forSale ? _saleMark() : "";
+    // Sale-state label overlay (only when listed or on auction). Kept as a
+    // separate concat so a non-sale token's art is byte-identical to the
+    // pre-marketplace version. LISTED and AUCTION are mutually exclusive, so
+    // at most one ever appears.
+    //   판매 상태 라벨 오버레이(리스팅 또는 경매 중일 때만). 별도 concat으로 두어,
+    //   비판매 토큰의 아트는 마켓 도입 이전과 바이트 단위로 동일. LISTED와
+    //   AUCTION은 상호 배타라 최대 하나만 표시된다.
+    string memory mark = _saleMark(saleState);
 
     return string.concat(head, frame, body, mark, "</svg>");
   }
 
-  /// @dev The "for sale" mark overlay: a restrained "LISTED" label in mint
-  ///      monospace near the bottom of the hex card. It does NOT cover the name
-  ///      or alter the tier-colored border, and shows NO price (only the boolean
-  ///      state — the marketplace site shows the price). To change the mark
-  ///      design later, edit ONLY this function.
-  ///      "판매중" 마크 오버레이: 육각 카드 하단의 절제된 민트 모노스페이스
-  ///      "LISTED" 라벨. 이름을 가리거나 등급 테두리를 바꾸지 않으며, 가격은
-  ///      표시하지 않는다(불리언 상태만; 가격은 마켓 사이트가 표시). 나중에
-  ///      마크 디자인을 바꾸려면 이 함수만 수정.
-  function _saleMark() internal pure returns (string memory) {
-    return string.concat(
-      '<text x="200" y="330" text-anchor="middle" font-family="monospace" '
-      'font-weight="400" font-size="15" fill="#00DC82" letter-spacing="2">'
-      'LISTED</text>'
-    );
+  /// @dev The sale-state mark overlay: a restrained label in monospace near the
+  ///      bottom of the hex card. Mutually exclusive states:
+  ///        1 = "LISTED"  in mint  (#00DC82) — fixed-price sale
+  ///        2 = "AUCTION" in amber (#FFB020) — English or Dutch auction
+  ///      It does NOT cover the name or alter the tier-colored border, and shows
+  ///      NO price (only the state — the site shows the price). To restyle a
+  ///      mark later, edit ONLY this function.
+  ///      판매 상태 마크 오버레이: 육각 카드 하단의 절제된 모노스페이스 라벨.
+  ///      상호 배타 상태: 1="LISTED" 민트(#00DC82, 고정가), 2="AUCTION"
+  ///      호박색(#FFB020, 영국식/네덜란드식). 이름·등급 테두리를 건드리지 않고
+  ///      가격은 표시하지 않는다(상태만; 가격은 사이트가 표시). 재디자인 시 이
+  ///      함수만 수정.
+  function _saleMark(uint8 saleState) internal pure returns (string memory) {
+    if (saleState == 1) {
+      return string.concat(
+        '<text x="200" y="330" text-anchor="middle" font-family="monospace" '
+        'font-weight="400" font-size="15" fill="#00DC82" letter-spacing="2">'
+        'LISTED</text>'
+      );
+    }
+    if (saleState == 2) {
+      return string.concat(
+        '<text x="200" y="330" text-anchor="middle" font-family="monospace" '
+        'font-weight="400" font-size="15" fill="#FFB020" letter-spacing="2">'
+        'AUCTION</text>'
+      );
+    }
+    return "";
   }
 
   /// @dev Render the name (wrapped, full) + the .dex suffix as SVG <text>.

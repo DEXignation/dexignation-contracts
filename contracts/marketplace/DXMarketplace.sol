@@ -70,6 +70,13 @@ interface IDXRegistrarMarket is IERC721 {
   function nameExpires(uint256 id) external view returns (uint256);
 }
 
+/// @dev Optional view into the auction contracts, used only to enforce mutual
+///      exclusion: a name on auction cannot also be fixed-price listed.
+///      경매 컨트랙트 조회(상호 배타 전용): 경매 중인 이름은 고정가 리스팅 불가.
+interface IDXAuctionCheck {
+  function isOnAuction(uint256 tokenId) external view returns (bool);
+}
+
 /// @title  DXMarketplace
 /// @notice Fixed-price, atomic P2P sales of `.dex` 2LD domain NFTs in
 ///         whitelisted stablecoins. Listings are fully on-chain, so the
@@ -115,6 +122,16 @@ contract DXMarketplace is Ownable, ReentrancyGuard {
   ///         스테이블코인으로 제한하여 가격을 오라클 없이 유지하고,
   ///         전송 수수료/악성 토큰 문제를 차단한다.
   mapping(address => bool) public allowedPayToken;
+
+  /// @notice English/Dutch auction contracts, queried for mutual exclusion.
+  ///         A name currently on either auction cannot be fixed-price listed.
+  ///         Either may be zero (check skipped for that one).
+  ///         영국식/네덜란드식 경매 컨트랙트(상호 배타 조회). 어느 경매든 진행
+  ///         중인 이름은 고정가 리스팅 불가. 0이면 해당 검사 생략.
+  IDXAuctionCheck public englishAuction;
+  IDXAuctionCheck public dutchAuction;
+
+  event AuctionContractsSet(address indexed english, address indexed dutch);
 
   // ──────────────────────────────────────────────────────────────────────────
   // Listing state (fully on-chain) / 리스팅 상태(완전 온체인)
@@ -166,6 +183,7 @@ contract DXMarketplace is Ownable, ReentrancyGuard {
   error NotTokenOwner(uint256 tokenId, address caller);
   error MarketplaceNotApproved(uint256 tokenId);
   error AlreadyListed(uint256 tokenId);
+  error OnAuction(uint256 tokenId);
   error NotListed(uint256 tokenId);
   error NotSeller(uint256 tokenId, address caller);
   error SellerNoLongerOwns(uint256 tokenId);
@@ -216,6 +234,15 @@ contract DXMarketplace is Ownable, ReentrancyGuard {
     emit PayTokenSet(token, allowed);
   }
 
+  /// @notice Set the auction contracts queried for mutual exclusion. Owner-only.
+  ///         Pass address(0) for either to disable that check.
+  ///         상호 배타 조회용 경매 컨트랙트 설정. 오너 전용. 0이면 해당 검사 비활성.
+  function setAuctionContracts(address english, address dutch) external onlyOwner {
+    englishAuction = IDXAuctionCheck(english);
+    dutchAuction = IDXAuctionCheck(dutch);
+    emit AuctionContractsSet(english, dutch);
+  }
+
   // ──────────────────────────────────────────────────────────────────────────
   // Seller flow / 판매자 흐름
   // ──────────────────────────────────────────────────────────────────────────
@@ -258,6 +285,21 @@ contract DXMarketplace is Ownable, ReentrancyGuard {
       !registrar.isApprovedForAll(msg.sender, address(this))
     ) {
       revert MarketplaceNotApproved(tokenId);
+    }
+
+    // Mutual exclusion: a name on either auction cannot be fixed-price listed.
+    // try/catch so a paused/replaced auction contract can never block listing.
+    //   상호 배타: 어느 경매든 진행 중인 이름은 고정가 리스팅 불가. 경매
+    //   컨트랙트가 멈추거나 교체돼도 리스팅을 막지 않도록 try/catch로 감쌈.
+    if (address(englishAuction) != address(0)) {
+      try englishAuction.isOnAuction(tokenId) returns (bool onAuction) {
+        if (onAuction) revert OnAuction(tokenId);
+      } catch { /* auction down → skip this check */ }
+    }
+    if (address(dutchAuction) != address(0)) {
+      try dutchAuction.isOnAuction(tokenId) returns (bool onAuction) {
+        if (onAuction) revert OnAuction(tokenId);
+      } catch { /* auction down → skip this check */ }
     }
 
     if (listings[tokenId].active) revert AlreadyListed(tokenId);
