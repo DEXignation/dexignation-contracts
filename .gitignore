@@ -62,3 +62,4 @@ tmp/
 *.pem
 secrets/
 **/private-keys.json
+ignition/deployments/*.backup-*

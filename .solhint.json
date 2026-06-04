@@ -8,6 +8,7 @@
     "no-inline-assembly": "warn",
     "reason-string": ["warn", { "maxLength": 64 }],
     "max-line-length": ["warn", 120],
+    "quotes": "off",
     "prettier/prettier": "off"
   }
 }
