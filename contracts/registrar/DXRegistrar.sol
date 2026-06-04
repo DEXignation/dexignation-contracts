@@ -587,13 +587,13 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     string memory tierName = _tierNameOf(tier, expired);
 
     string memory json = string.concat(
-      "{'name':'", label, dotTld, "',"
+      '{"name":"', label, dotTld, '",'
       '"description":"DEXignation Name: ', label, dotTld,
-      " (", tierName, " tier)',"
-      '"attributes":[{"trait_type":"Tier","value":"', tierName, "'}],"
+      ' (', tierName, ' tier)",'
+      '"attributes":[{"trait_type":"Tier","value":"', tierName, '"}],'
       '"image":"data:image/svg+xml;base64,',
       Base64.encode(bytes(svg)),
-      "'}"
+      '"}'
     );
     return string.concat(
       "data:application/json;base64,",
@@ -716,11 +716,11 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     string memory hexInner = "200,70 314,143 314,297 200,370 86,297 86,143";
 
     string memory head = string.concat(
-      "<svg width='400' height='400' xmlns='http://www.w3.org/2000/svg'>"
+      '<svg width="400" height="400" xmlns="http://www.w3.org/2000/svg">'
       '<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">'
-      '<stop offset="0%" stop-color="', c0, "'/>"
-      '<stop offset="38%" stop-color="', c1, "'/>"
-      '<stop offset="100%" stop-color="', c2, "'/>"
+      '<stop offset="0%" stop-color="', c0, '"/>'
+      '<stop offset="38%" stop-color="', c1, '"/>'
+      '<stop offset="100%" stop-color="', c2, '"/>'
       '</linearGradient>'
       '<radialGradient id="sh" cx="38%" cy="22%" r="72%">'
       '<stop offset="0%" stop-color="#ffffff" stop-opacity="0.22"/>'
@@ -731,10 +731,10 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     );
 
     string memory frame = string.concat(
-      "<polygon points='", hexPts, "' fill='url(#bg)' stroke='#000000' stroke-width='6'/>"
-      '<polygon points="', hexPts, "' fill='none' stroke='", accent, "' stroke-width='5' stroke-opacity='0.9'/>"
-      '<polygon points="', hexInner, "' fill='none' stroke='#ffffff' stroke-width='1.5' stroke-opacity='0.16'/>"
-      '<polygon points="', hexPts, "' fill='url(#sh)'/>"
+      '<polygon points="', hexPts, '" fill="url(#bg)" stroke="#000000" stroke-width="6"/>'
+      '<polygon points="', hexPts, '" fill="none" stroke="', accent, '" stroke-width="5" stroke-opacity="0.9"/>'
+      '<polygon points="', hexInner, '" fill="none" stroke="#ffffff" stroke-width="1.5" stroke-opacity="0.16"/>'
+      '<polygon points="', hexPts, '" fill="url(#sh)"/>'
     );
 
     string memory body = _nameSvg(label, dotTld, textColor);
@@ -766,14 +766,14 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
   function _saleMark(uint8 saleState) internal pure returns (string memory) {
     if (saleState == 1) {
       return string.concat(
-        "<text x='200' y='330' text-anchor='middle' font-family='monospace' "
+        '<text x="200" y="330" text-anchor="middle" font-family="monospace" '
         'font-weight="400" font-size="15" fill="#00DC82" letter-spacing="2">'
         'LISTED</text>'
       );
     }
     if (saleState == 2) {
       return string.concat(
-        "<text x='200' y='330' text-anchor='middle' font-family='monospace' "
+        '<text x="200" y="330" text-anchor="middle" font-family="monospace" '
         'font-weight="400" font-size="15" fill="#FFB020" letter-spacing="2">'
         'AUCTION</text>'
       );
@@ -833,11 +833,11 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
       uint256 y = blockTop + i * lineH + fontSize; // baseline
       nameText = string.concat(
         nameText,
-        "<text x='200' y='", _u(y),
-        "' text-anchor='middle' font-family='sans-serif' font-weight='700' font-size='",
-        _u(fontSize), "' fill='", textColor, "'>",
+        '<text x="200" y="', _u(y),
+        '" text-anchor="middle" font-family="sans-serif" font-weight="700" font-size="',
+        _u(fontSize), '" fill="', textColor, '">',
         lines[i],
-        "</text>"
+        '</text>'
       );
     }
 
@@ -845,11 +845,11 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     //   .dex 접미사, 이름 블록 바로 아래.
     uint256 sufY = blockTop + lineCount * lineH + 30;
     string memory suffix = string.concat(
-      "<text x='200' y='", _u(sufY),
-      "' text-anchor='middle' font-family='sans-serif' font-weight='400' font-size='20' fill='",
-      textColor, "' fill-opacity='0.6'>",
+      '<text x="200" y="', _u(sufY),
+      '" text-anchor="middle" font-family="sans-serif" font-weight="400" font-size="20" fill="',
+      textColor, '" fill-opacity="0.6">',
       dotTld,
-      "</text>"
+      '</text>'
     );
 
     return string.concat(nameText, suffix);
