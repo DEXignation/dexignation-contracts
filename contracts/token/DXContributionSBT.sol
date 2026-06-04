@@ -145,10 +145,10 @@ contract DXContributionSBT is ERC721, Ownable {
 
     string memory svg = _generateSVG(tokenId, cat);
     string memory json = string.concat(
-      '{"name":"DEXignation Contributor #', tokenId.toString(),
-      '","description":"', desc,
-      '","attributes":[{"trait_type":"category","value":"', cat, '"}],'
-      '"image":"data:image/svg+xml;base64,', Base64.encode(bytes(svg)), '"}'
+      "{'name':'DEXignation Contributor #", tokenId.toString(),
+      "','description':'", desc,
+      "','attributes':[{'trait_type':'category','value':'", cat, "'}],"
+      '"image":"data:image/svg+xml;base64,', Base64.encode(bytes(svg)), "'}"
     );
     return string.concat(
       "data:application/json;base64,",
@@ -160,7 +160,7 @@ contract DXContributionSBT is ERC721, Ownable {
     internal pure returns (string memory)
   {
     return string.concat(
-      '<svg width="400" height="400" xmlns="http://www.w3.org/2000/svg">'
+      "<svg width='400' height='400' xmlns='http://www.w3.org/2000/svg'>"
       '<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">'
       '<stop offset="0%" stop-color="#0D1117"/>'
       '<stop offset="100%" stop-color="#1A2030"/>'
@@ -170,10 +170,10 @@ contract DXContributionSBT is ERC721, Ownable {
       '<text x="200" y="120" text-anchor="middle" font-family="sans-serif" font-size="20" fill="#64748B">CONTRIBUTOR</text>'
       '<text x="200" y="200" text-anchor="middle" font-family="sans-serif" font-weight="bold" font-size="44" fill="#00DC82">#',
       tokenId.toString(),
-      '</text>'
+      "</text>"
       '<text x="200" y="260" text-anchor="middle" font-family="monospace" font-size="16" fill="#94A3B8">',
       cat,
-      '</text>'
+      "</text>"
       '<text x="200" y="360" text-anchor="middle" font-family="monospace" font-size="11" fill="#2D3A48">DEXignation \xc2\xb7 Soulbound</text>'
       '</svg>'
     );

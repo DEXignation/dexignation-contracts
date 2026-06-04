@@ -19,7 +19,6 @@
 pragma solidity ^0.8.28;
 
 import {IDXRegistry} from "../registry/IDXRegistry.sol";
-import {IDXResolver} from "../resolver/IDXResolver.sol";
 import {DXNamehash} from "../utils/DXNamehash.sol";
 
 /// @title  DXReverseRegistrar

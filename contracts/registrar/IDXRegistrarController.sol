@@ -23,8 +23,6 @@
 
 pragma solidity ^0.8.28;
 
-import {IDXRegistrar} from "./IDXRegistrar.sol";
-import {IDXPriceOracle} from "../oracle/IDXPriceOracle.sol";
 
 interface IDXRegistrarController {
 
