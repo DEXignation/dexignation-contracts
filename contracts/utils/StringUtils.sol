@@ -115,17 +115,10 @@ library StringUtils {
   ///
   ///         This is intentionally narrow for launch. Phishing via Unicode
   ///         homoglyphs (`r` vs `г`, lookalike spacing, RTL marks) is
-  ///         impossible inside this set. A future `isValidUnicodeLabel`
-  ///         can run UTS-46 / ENSIP-15 normalisation for full-Unicode
-  ///         support after the framework is in place.
+  ///         impossible inside this set.
   ///
   ///         초기 정책 strict 라벨 검증: `a-z`, `0-9`, `-`만 허용. 하이픈은
   ///         선두/말미/연속 금지 (DNS LDH 부분집합).
-  ///
-  ///         출시 단계용 의도적으로 좁은 정책. 이 집합 안에서는 유니코드
-  ///         homoglyph (`r` vs `г` 등)이나 보이지 않는 공백/RTL 마크로 인한
-  ///         피싱이 불가능. 향후 UTS-46/ENSIP-15 normalize를 적용한
-  ///         `isValidUnicodeLabel`을 도입해 전체 유니코드 지원 가능.
   function isValidAsciiLabel(string calldata s) internal pure returns (bool) {
     bytes memory b = bytes(s);
     uint256 n = b.length;
@@ -144,17 +137,34 @@ library StringUtils {
     return true;
   }
 
-  /// @notice Validate a user-facing label with multilingual UTF-8 support.
-  ///         ASCII characters are kept to the conservative launch set
-  ///         (`a-z`, `0-9`, `-`) so dots, whitespace, quotes, slashes, and
-  ///         markup-sensitive characters cannot enter names. Non-ASCII
-  ///         characters are accepted only when encoded as well-formed UTF-8
-  ///         Unicode scalar values.
+  /// @notice Validate a user-facing label with multilingual UTF-8 support,
+  ///         restricted to PRECOMPOSED (NFC) characters only.
   ///
-  ///         다국어 UTF-8 라벨 검증. ASCII 문자는 보수적인 기존 집합
-  ///         (`a-z`, `0-9`, `-`)만 허용해 점, 공백, 따옴표, 슬래시,
-  ///         마크업 민감 문자를 차단한다. 비-ASCII 문자는 올바른 UTF-8
-  ///         유니코드 스칼라 값일 때만 허용한다.
+  ///         ASCII is limited to `a-z`, `0-9`, `-` so dots, whitespace,
+  ///         quotes, slashes, and markup-sensitive characters cannot enter
+  ///         names. Non-ASCII characters are accepted only when they are
+  ///         well-formed UTF-8 AND are not combining/decomposed/invisible
+  ///         codepoints (see `_isUnsafeUnicodeCodepoint`).
+  ///
+  ///         WHY NFC-ONLY: a normal user typing on their native keyboard/IME
+  ///         always produces precomposed (NFC) characters — French `é`
+  ///         (U+00E9), Japanese `が` (U+304C), Korean `한` (U+D55C) are each a
+  ///         single codepoint. Combining marks (`e`+◌́) and conjoining Hangul
+  ///         jamo are not produced by normal input; injecting them is an
+  ///         attack that creates a *visually identical but cryptographically
+  ///         different* name (different labelhash → different NFT). By
+  ///         rejecting the combining/decomposed ranges we let every language's
+  ///         normal NFC input through while blocking the spoofing vector —
+  ///         no per-language whitelist needed.
+  ///
+  ///         다국어 UTF-8 라벨 검증 (완성형/NFC 전용). 사용자가 자국
+  ///         키보드/IME로 정상 입력하면 항상 완성형 한 글자가 나온다
+  ///         (불어 `é`=U+00E9, 일본어 `が`=U+304C, 한글 `한`=U+D55C).
+  ///         결합용 분음부호나 한글 분해 자모는 정상 입력으로 나오지 않으며,
+  ///         이를 끼워 넣는 것은 "시각적으로 동일하지만 labelhash가 다른"
+  ///         이름을 만드는 공격이다. 결합/분해 영역만 거부하면 언어별
+  ///         화이트리스트 없이 모든 언어의 완성형 입력은 통과시키면서
+  ///         스푸핑 벡터를 차단한다.
   function isValidUnicodeLabel(string calldata s) internal pure returns (bool) {
     bytes memory b = bytes(s);
     uint256 n = b.length;
@@ -230,13 +240,43 @@ library StringUtils {
     return c >= 0x80 && c <= 0xBF;
   }
 
+  /// @dev Reject codepoints that are unsafe (invisible/bidi) OR that break the
+  ///      NFC-only (precomposed) policy by being combining/decomposed marks.
+  ///      Precomposed letters of every language pass; the decomposed building
+  ///      blocks that would let an attacker forge a look-alike name do not.
+  ///
+  ///      위험(invisible/bidi) 코드포인트와, 완성형(NFC) 정책을 깨뜨리는
+  ///      결합/분해 문자를 거부한다. 모든 언어의 완성형 글자는 통과하고,
+  ///      look-alike 이름을 위조하는 데 쓰이는 분해형 구성요소는 막힌다.
   function _isUnsafeUnicodeCodepoint(uint32 cp) private pure returns (bool) {
-    // Reject common invisible formatting and bidi controls.
-    // 흔한 보이지 않는 포맷/양방향 제어 문자 거부.
-    if (cp >= 0x200B && cp <= 0x200F) return true;
-    if (cp >= 0x202A && cp <= 0x202E) return true;
-    if (cp >= 0x2060 && cp <= 0x206F) return true;
-    if (cp == 0x00A0 || cp == 0xFEFF) return true;
+    // ── (1) Invisible formatting / bidi controls ────────────────────────
+    //     보이지 않는 포맷 / 양방향 제어 문자.
+    if (cp >= 0x200B && cp <= 0x200F) return true; // zero-width 계열
+    if (cp >= 0x202A && cp <= 0x202E) return true; // bidi embedding/override
+    if (cp >= 0x2066 && cp <= 0x2069) return true; // bidi isolate
+    if (cp >= 0x2060 && cp <= 0x206F) return true; // word-joiner 등
+    if (cp == 0x00A0 || cp == 0xFEFF) return true; // NBSP, BOM/ZWNBSP
+
+    // ── (2) Combining marks (Latin/Greek/Cyrillic/Vietnamese 분해형) ─────
+    //     완성형이 아닌, 다른 글자 뒤에 결합되는 분음부호 등. 정상 키보드
+    //     입력으로는 나오지 않으며 look-alike 위조에만 쓰인다.
+    if (cp >= 0x0300 && cp <= 0x036F) return true; // Combining Diacritical Marks
+    if (cp >= 0x1AB0 && cp <= 0x1AFF) return true; // Combining Diacritical Ext
+    if (cp >= 0x1DC0 && cp <= 0x1DFF) return true; // Combining Diacritical Suppl
+    if (cp >= 0x20D0 && cp <= 0x20FF) return true; // Combining Marks for Symbols
+    if (cp >= 0xFE20 && cp <= 0xFE2F) return true; // Combining Half Marks
+
+    // ── (3) Hangul decomposed jamo (한글 자모분해형) ─────────────────────
+    //     완성형(U+AC00~U+D7A3)만 허용. 분해 자모 영역을 차단한다.
+    if (cp >= 0x1100 && cp <= 0x11FF) return true; // Hangul Jamo (conjoining)
+    if (cp >= 0xA960 && cp <= 0xA97F) return true; // Hangul Jamo Extended-A
+    if (cp >= 0xD7B0 && cp <= 0xD7FF) return true; // Hangul Jamo Extended-B
+    if (cp >= 0x3130 && cp <= 0x318F) return true; // Hangul Compatibility Jamo
+
+    // ── (4) Japanese combining (반)탁점 ─────────────────────────────────
+    //     が = U+304C (완성형) 통과, か + U+3099 (결합 탁점) 차단.
+    if (cp == 0x3099 || cp == 0x309A) return true; // combining (semi-)voiced mark
+
     return false;
   }
 }

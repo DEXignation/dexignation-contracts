@@ -271,4 +271,108 @@ describe("DXSubnameRegistrar — subname commerce (A3)", function () {
     expect(after - before).to.equal(expectedOwner);
     expect(feeAfter - feeBefore).to.equal(expectedFee);
   });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Label validation (i18n hardening): subnames must satisfy the SAME policy as
+  // 2LD — NFC-only (precomposed), ASCII a-z/0-9/-, min 3 codepoints. Closes the
+  // structural-safety bypass (dots, whitespace, bidi, decomposed look-alikes).
+  //   서브네임 라벨도 2LD와 동일 정책. 점·공백·bidi·분해형(NFD) 우회 차단.
+  // ──────────────────────────────────────────────────────────────────────────
+
+  // NFC(완성형) 한글 3자 — 정상, 통과해야 함.
+  const NFC_KO = "회사몰";
+  // NFD(자모분해형) — 시각적으로 동일하나 conjoining jamo로 분해됨, 거부돼야 함.
+  const NFD_KO = "회사몰".normalize("NFD");
+
+  it("accepts a precomposed (NFC) Korean subname", async function () {
+    const deployed = await deploy();
+    const parentNode = await setupCommerce(deployed, "valnfc");
+    await deployed.module.write.registerSubname([parentNode, NFC_KO], {
+      account: deployed.bob.account,
+      value: PRICE,
+    });
+    const sub = subnodeFor(parentNode, NFC_KO);
+    const subOwner = await deployed.registry.read.owner([sub]);
+    expect(subOwner.toLowerCase()).to.equal(
+      deployed.bob.account.address.toLowerCase(),
+    );
+  });
+
+  it("rejects a decomposed (NFD) Hangul subname", async function () {
+    // Sanity: ensure the literal is actually decomposed, not silently NFC.
+    //   리터럴이 실제로 분해형인지 확인 (에디터가 NFC로 저장하는 함정 방지).
+    expect(NFD_KO).to.not.equal(NFC_KO);
+    const deployed = await deploy();
+    const parentNode = await setupCommerce(deployed, "valnfd");
+    await expectRevert(
+      deployed.module.write.registerSubname([parentNode, NFD_KO], {
+        account: deployed.bob.account,
+        value: PRICE,
+      }),
+      "InvalidLabel",
+    );
+  });
+
+  it("rejects a subname label containing a dot", async function () {
+    const deployed = await deploy();
+    const parentNode = await setupCommerce(deployed, "valdot");
+    await expectRevert(
+      deployed.module.write.registerSubname([parentNode, "a.b"], {
+        account: deployed.bob.account,
+        value: PRICE,
+      }),
+      "InvalidLabel",
+    );
+  });
+
+  it("rejects a subname label containing whitespace", async function () {
+    const deployed = await deploy();
+    const parentNode = await setupCommerce(deployed, "valspace");
+    await expectRevert(
+      deployed.module.write.registerSubname([parentNode, "a b"], {
+        account: deployed.bob.account,
+        value: PRICE,
+      }),
+      "InvalidLabel",
+    );
+  });
+
+  it("rejects a subname label with an invisible/bidi codepoint", async function () {
+    // U+202E (RIGHT-TO-LEFT OVERRIDE) — classic spoofing control character.
+    const deployed = await deploy();
+    const parentNode = await setupCommerce(deployed, "valbidi");
+    const sneaky = "ab\u202Ecd";
+    await expectRevert(
+      deployed.module.write.registerSubname([parentNode, sneaky], {
+        account: deployed.bob.account,
+        value: PRICE,
+      }),
+      "InvalidLabel",
+    );
+  });
+
+  it("rejects a subname shorter than 3 codepoints", async function () {
+    const deployed = await deploy();
+    const parentNode = await setupCommerce(deployed, "vallen");
+    await expectRevert(
+      deployed.module.write.registerSubname([parentNode, "ab"], {
+        account: deployed.bob.account,
+        value: PRICE,
+      }),
+      "InvalidLabel",
+    );
+  });
+
+  it("rejects an uppercase ASCII subname (lowercase-only policy)", async function () {
+    const deployed = await deploy();
+    const parentNode = await setupCommerce(deployed, "valcase");
+    await expectRevert(
+      deployed.module.write.registerSubname([parentNode, "ABC"], {
+        account: deployed.bob.account,
+        value: PRICE,
+      }),
+      "InvalidLabel",
+    );
+  });
+
 });

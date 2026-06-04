@@ -37,6 +37,7 @@ pragma solidity 0.8.28;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "../utils/StringUtils.sol";
 
 /// @dev Minimal registry interface this module depends on. Mirrors the
 ///      relevant functions of DXRegistry without importing its implementation,
@@ -73,6 +74,7 @@ interface IGateBalance {
 }
 
 contract DXSubnameRegistrar is Ownable, ReentrancyGuard {
+  using StringUtils for string;
   // ──────────────────────────────────────────────────────────────────────────
   // Immutable wiring / 불변 연결
   // ──────────────────────────────────────────────────────────────────────────
@@ -171,6 +173,7 @@ contract DXSubnameRegistrar is Ownable, ReentrancyGuard {
   error ModuleNotApproved(bytes32 parentNode, address parentOwner);
   error IncorrectPayment(uint256 sent, uint256 required);
   error EmptyLabel();
+  error InvalidLabel(string label);
   error GateNotMet(bytes32 parentNode, address gateToken, uint256 required, uint256 held);
   error FeeTooHigh(uint256 requested, uint256 max);
   error ZeroAddress();
@@ -286,6 +289,16 @@ contract DXSubnameRegistrar is Ownable, ReentrancyGuard {
     string calldata label
   ) external payable nonReentrant returns (bytes32 subnode) {
     if (bytes(label).length == 0) revert EmptyLabel();
+    // Same multilingual policy as 2LD: NFC-only (precomposed) characters,
+    // ASCII restricted to a-z/0-9/-, and minimum 3 codepoints. Prevents the
+    // subname path from becoming a bypass for dots, whitespace, bidi marks,
+    // or decomposed look-alike names.
+    //   2LD와 동일한 다국어 정책: 완성형(NFC) 전용, ASCII는 a-z/0-9/-,
+    //   최소 3 코드포인트. 서브네임이 점·공백·bidi·분해형 우회 경로가
+    //   되지 않도록 동일 검증을 강제한다.
+    if (!(label.strlen() >= 3 && label.isValidUnicodeLabel())) {
+      revert InvalidLabel(label);
+    }
     if (!salesEnabled[parentNode]) revert SalesDisabled(parentNode);
     if (registry.isExpired(parentNode)) revert ParentExpired(parentNode);
 
