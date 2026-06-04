@@ -376,16 +376,15 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   // View functions / 조회 함수
   // ──────────────────────────────────────────────────────────────────────────
 
-  /// @notice A label is valid if it is (a) at least 3 characters and
-  ///         (b) strict ASCII-lowercase with digits and hyphens (no
-  ///         leading/trailing/double hyphens). This is the initial
-  ///         normalisation policy — see `StringUtils.isValidAsciiLabel`
-  ///         for full rationale.
-  ///         라벨 유효성: (a) 3자 이상, (b) strict ASCII lowercase + 숫자 +
-  ///         하이픈 (선두/말미/연속 하이픈 금지). 초기 정규화 정책 — 자세한
-  ///         사유는 `StringUtils.isValidAsciiLabel` 참고.
+  /// @notice A label is valid if it is at least 3 UTF-8 codepoints and
+  ///         passes the multilingual label policy. ASCII is limited to
+  ///         `a-z`, `0-9`, and hyphen; valid non-ASCII UTF-8 codepoints are
+  ///         allowed for multilingual names.
+  ///         라벨 유효성: UTF-8 코드포인트 3자 이상이며 다국어 라벨 정책을
+  ///         통과해야 한다. ASCII는 `a-z`, `0-9`, 하이픈만 허용하고,
+  ///         올바른 비-ASCII UTF-8 코드포인트는 다국어 이름용으로 허용한다.
   function isValidLabel(string calldata label) public pure returns (bool) {
-    return label.strlen() >= 3 && label.isValidAsciiLabel();
+    return label.strlen() >= 3 && label.isValidUnicodeLabel();
   }
 
   /// @inheritdoc IDXRegistrarController

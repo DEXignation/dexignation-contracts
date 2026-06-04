@@ -59,7 +59,7 @@ function randomValidLabel(rng: SeededRandom): string {
 }
 
 function randomInvalidLabel(rng: SeededRandom): string {
-  const variant = rng.range(0, 6);
+  const variant = rng.range(0, 8);
   switch (variant) {
     case 0: return "";
     case 1: return "ab";
@@ -67,7 +67,9 @@ function randomInvalidLabel(rng: SeededRandom): string {
     case 3: return "-leading";
     case 4: return "trailing-";
     case 5: return "doub--le";
-    case 6: return "한글";
+    case 6: return "has space";
+    case 7: return "name.dex";
+    case 8: return "bad<label";
     default: return "INVALID";
   }
 }

@@ -66,6 +66,49 @@ describe("DXRegistrarController — registration flow", function () {
     return { ...deployed, owner, user, publicClient, testClient };
   }
 
+  it("accepts multilingual labels while rejecting unsafe ASCII labels", async function () {
+    const { controller } = await deploy();
+
+    for (const label of ["홍길동", "東京名", "مرحبا", "中文명"]) {
+      expect(await controller.read.isValidLabel([label])).to.equal(true);
+    }
+
+    for (const label of ["Alice", "ab cd", "alice.dex", "bad<label", "doub--le"]) {
+      expect(await controller.read.isValidLabel([label])).to.equal(false);
+    }
+  });
+
+  it("registers a multilingual label end-to-end", async function () {
+    const { controller, registrar, resolver, registry, user, testClient } = await deploy();
+
+    const label = "홍길동";
+    const secret = `0x${"66".repeat(32)}` as `0x${string}`;
+    const userAddr = user.account.address;
+
+    const commitment = makeCommitmentFull(
+      label, userAddr, ONE_YEAR, resolver.address, ZERO_ADDR, secret,
+    );
+    await controller.write.commit([commitment], { account: user.account });
+
+    await testClient.increaseTime({ seconds: Number(MIN_COMMITMENT_AGE) + 5 });
+    await testClient.mine({ blocks: 1 });
+
+    const price = await controller.read.rentPrice([ONE_YEAR]);
+    await controller.write.register(
+      [label, userAddr, ONE_YEAR, resolver.address, secret],
+      { account: user.account, value: price },
+    );
+
+    const tokenId = tokenIdFromLabel(label);
+    const tokenOwner = await registrar.read.ownerOf([tokenId]);
+    expect(tokenOwner.toLowerCase()).to.equal(userAddr.toLowerCase());
+
+    const baseNode = await registrar.read.baseNode();
+    const subnode = subnodeFor(baseNode, label);
+    const subnodeOwner = await registry.read.owner([subnode]);
+    expect(subnodeOwner.toLowerCase()).to.equal(userAddr.toLowerCase());
+  });
+
   it("registers a name end-to-end with native payment", async function () {
     const { controller, registrar, resolver, registry, user, publicClient, testClient } =
       await deploy();

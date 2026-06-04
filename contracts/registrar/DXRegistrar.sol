@@ -53,6 +53,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 
 import {IDXRegistrar} from "./IDXRegistrar.sol";
 import {IDXRegistry} from "../registry/IDXRegistry.sol";
+import "../utils/StringUtils.sol";
 
 /// @dev Minimal interface to invalidate resolver records on transfer.
 ///      전송 시 리졸버 레코드를 무효화하기 위한 최소 인터페이스.
@@ -84,6 +85,8 @@ interface IDXAuctionView {
 ///         노출하여 2차 마켓플레이스가 재판매 수익의 일부를 프로토콜
 ///         금고로 자동 라우팅하도록 한다.
 contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
+  using StringUtils for string;
+
   IDXRegistry public immutable registry;
 
   /// @notice namehash of the TLD this registrar governs (e.g. namehash("dex")).
@@ -788,7 +791,7 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     string memory dotTld,
     string memory textColor
   ) internal pure returns (string memory) {
-    uint256 len = bytes(label).length; // ASCII labels: bytes == chars
+    uint256 len = label.strlenMemory();
 
     // Choose font size and characters-per-line by length. The hex interior is
     // widest at the vertical center, so we center lines around y=200.
@@ -815,7 +818,7 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     uint256 pos = 0;
     while (pos < len && lineCount < 3) {
       uint256 take = len - pos < perLine ? len - pos : perLine;
-      lines[lineCount] = _substr(label, pos, take);
+      lines[lineCount] = label.substrCodepoints(pos, take);
       pos += take;
       lineCount += 1;
     }
@@ -850,21 +853,6 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     );
 
     return string.concat(nameText, suffix);
-  }
-
-  /// @dev Extract `count` bytes from `str` starting at `start`. ASCII-safe.
-  ///      `str`의 `start`부터 `count` 바이트 추출. ASCII 전용.
-  function _substr(string memory str, uint256 start, uint256 count)
-    internal
-    pure
-    returns (string memory)
-  {
-    bytes memory s = bytes(str);
-    bytes memory out = new bytes(count);
-    for (uint256 i = 0; i < count; i++) {
-      out[i] = s[start + i];
-    }
-    return string(out);
   }
 
   /// @dev uint256 → decimal string (small values; for SVG coordinates).
