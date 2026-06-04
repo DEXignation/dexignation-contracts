@@ -26,6 +26,7 @@
     "deploy:local": "hardhat ignition deploy ignition/modules/DXDeployLocal.ts --network localhost",
     "deploy:amoy": "hardhat ignition deploy ignition/modules/DXDeployAmoy.ts --network amoy",
     "deploy:polygon": "hardhat ignition deploy ignition/modules/DXDeployPolygon.ts --network polygon",
+    "deploy:polygon-trading": "hardhat ignition deploy ignition/modules/DXDeployTradingPolygon.ts --network polygon",
     "verify:amoy": "hardhat verify --network amoy",
     "verify:polygon": "hardhat verify --network polygon",
     "node": "hardhat node",
