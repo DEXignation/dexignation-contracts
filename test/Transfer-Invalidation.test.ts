@@ -18,19 +18,10 @@
 
 import { expect } from "chai";
 import { network } from "hardhat";
-import {
-  keccak256,
-  toBytes,
-  encodePacked,
-  encodeAbiParameters,
-  parseAbiParameters,
-} from "viem";
+import { keccak256, toBytes, encodePacked, encodeAbiParameters, parseAbiParameters } from "viem";
 import DXDeployLocal from "../ignition/modules/DXDeployLocal.js";
 
-async function expectRevert(
-  promise: Promise<unknown>,
-  keyword?: string,
-): Promise<void> {
+async function expectRevert(promise: Promise<unknown>, keyword?: string): Promise<void> {
   try {
     await promise;
   } catch (err: unknown) {
@@ -73,10 +64,7 @@ function subnodeFor(parent: `0x${string}`, label: string): `0x${string}` {
   return keccak256(encodePacked(["bytes32", "bytes32"], [parent, labelHash(label)]));
 }
 function tldNode(): `0x${string}` {
-  return subnodeFor(
-    "0x0000000000000000000000000000000000000000000000000000000000000000",
-    "dex",
-  );
+  return subnodeFor("0x0000000000000000000000000000000000000000000000000000000000000000", "dex");
 }
 
 describe("Transfer safety — control transfer + record invalidation (v2)", function () {
@@ -96,14 +84,7 @@ describe("Transfer safety — control transfer + record invalidation (v2)", func
     const commitment = keccak256(
       encodeAbiParameters(
         parseAbiParameters("string, address, uint256, address, address, bytes32"),
-        [
-          label,
-          registrant.account.address,
-          ONE_YEAR,
-          resolver.address,
-          ZERO_ADDR,
-          secret,
-        ],
+        [label, registrant.account.address, ONE_YEAR, resolver.address, ZERO_ADDR, secret],
       ),
     );
     await controller.write.commit([commitment], { account: registrant.account });
@@ -127,20 +108,22 @@ describe("Transfer safety — control transfer + record invalidation (v2)", func
     const id = tokenIdFromLabel("ctrlmove");
 
     // Before: registry owner is alice (set during registration delivery).
-    expect((await registry.read.owner([node])).toLowerCase())
-      .to.equal(alice.account.address.toLowerCase());
-
-    // Secondary transfer alice → bob.
-    await registrar.write.transferFrom(
-      [alice.account.address, bob.account.address, id],
-      { account: alice.account },
+    expect((await registry.read.owner([node])).toLowerCase()).to.equal(
+      alice.account.address.toLowerCase(),
     );
 
+    // Secondary transfer alice → bob.
+    await registrar.write.transferFrom([alice.account.address, bob.account.address, id], {
+      account: alice.account,
+    });
+
     // After: NFT owner AND registry owner are both bob.
-    expect((await registrar.read.ownerOf([id])).toLowerCase())
-      .to.equal(bob.account.address.toLowerCase());
-    expect((await registry.read.owner([node])).toLowerCase())
-      .to.equal(bob.account.address.toLowerCase());
+    expect((await registrar.read.ownerOf([id])).toLowerCase()).to.equal(
+      bob.account.address.toLowerCase(),
+    );
+    expect((await registry.read.owner([node])).toLowerCase()).to.equal(
+      bob.account.address.toLowerCase(),
+    );
   });
 
   // ── Core: all six record kinds invalidated ────────────────────────────────
@@ -152,47 +135,55 @@ describe("Transfer safety — control transfer + record invalidation (v2)", func
     const id = tokenIdFromLabel("wipeall");
 
     // alice populates every record kind.
-    await resolver.write.setAddr(
-      [node, COIN_TYPE_POLYGON, alice.account.address],
-      { account: alice.account },
-    );
+    await resolver.write.setAddr([node, COIN_TYPE_POLYGON, alice.account.address], {
+      account: alice.account,
+    });
     await resolver.write.setText([node, "email", "alice@x.com"], {
       account: alice.account,
     });
     await resolver.write.setContenthash([node, IPFS_HASH], {
       account: alice.account,
     });
-    await resolver.write.setProfile(
-      [node, "en", "Alice", "bio", "ipfs://av", "https://a.dex"],
-      { account: alice.account },
-    );
-    await resolver.write.setAgent(
-      [node, AGENT_REGISTRY, AGENT_ID, CARD_URI, PAY_TO, PAY_TOKEN],
-      { account: alice.account },
-    );
+    // Profile fields now live under standard EIP-634 keys via multi-lang text.
+    //   프로필 필드는 표준 키(name/description/avatar/url) 다국어 text로 저장.
+    await resolver.write.setMultiLangText([node, "name", "en", "Alice"], {
+      account: alice.account,
+    });
+    await resolver.write.setMultiLangText([node, "description", "en", "bio"], {
+      account: alice.account,
+    });
+    await resolver.write.setMultiLangText([node, "avatar", "en", "ipfs://av"], {
+      account: alice.account,
+    });
+    await resolver.write.setMultiLangText([node, "url", "en", "https://a.dex"], {
+      account: alice.account,
+    });
+    await resolver.write.setAgent([node, AGENT_REGISTRY, AGENT_ID, CARD_URI, PAY_TO, PAY_TOKEN], {
+      account: alice.account,
+    });
 
     // Sanity: records are set (addr is the auto-set one + our explicit set).
-    expect((await resolver.read.addr([node, COIN_TYPE_POLYGON])).toLowerCase())
-      .to.equal(alice.account.address.toLowerCase());
+    expect((await resolver.read.addr([node, COIN_TYPE_POLYGON])).toLowerCase()).to.equal(
+      alice.account.address.toLowerCase(),
+    );
     expect(await resolver.read.text([node, "email"])).to.equal("alice@x.com");
     expect(await resolver.read.hasAgent([node])).to.equal(true);
 
     // Secondary transfer alice → bob triggers invalidation.
-    await registrar.write.transferFrom(
-      [alice.account.address, bob.account.address, id],
-      { account: alice.account },
-    );
+    await registrar.write.transferFrom([alice.account.address, bob.account.address, id], {
+      account: alice.account,
+    });
 
     // ALL record kinds now return empty/zero (version bumped).
     expect(await resolver.read.addr([node, COIN_TYPE_POLYGON])).to.equal("0x");
     expect(await resolver.read.text([node, "email"])).to.equal("");
     expect(await resolver.read.contenthash([node])).to.equal("0x");
-    const [pName, pBio, pAvatar, pUrl] =
-      await resolver.read.getProfile([node, "en"]);
-    expect(pName).to.equal("");
-    expect(pBio).to.equal("");
-    expect(pAvatar).to.equal("");
-    expect(pUrl).to.equal("");
+    // Profile fields (standard keys) are wiped by the version bump too.
+    //   표준 키 프로필 필드도 버전 증가로 무효화된다.
+    expect(await resolver.read.getMultiLangText([node, "name", "en"])).to.equal("");
+    expect(await resolver.read.getMultiLangText([node, "description", "en"])).to.equal("");
+    expect(await resolver.read.getMultiLangText([node, "avatar", "en"])).to.equal("");
+    expect(await resolver.read.getMultiLangText([node, "url", "en"])).to.equal("");
     expect(await resolver.read.hasAgent([node])).to.equal(false);
     const [aReg, , , aPayTo] = await resolver.read.getAgent([node]);
     expect(aReg).to.equal(ZERO_ADDR);
@@ -207,27 +198,25 @@ describe("Transfer safety — control transfer + record invalidation (v2)", func
     const node = await registerName(deployed, alice, "authflip");
     const id = tokenIdFromLabel("authflip");
 
-    await registrar.write.transferFrom(
-      [alice.account.address, bob.account.address, id],
-      { account: alice.account },
-    );
+    await registrar.write.transferFrom([alice.account.address, bob.account.address, id], {
+      account: alice.account,
+    });
 
     // Old owner (alice) can no longer write — registry owner is bob now.
     await expectRevert(
-      resolver.write.setAddr(
-        [node, COIN_TYPE_POLYGON, alice.account.address],
-        { account: alice.account },
-      ),
+      resolver.write.setAddr([node, COIN_TYPE_POLYGON, alice.account.address], {
+        account: alice.account,
+      }),
       "Not authorized",
     );
 
     // New owner (bob) can write.
-    await resolver.write.setAddr(
-      [node, COIN_TYPE_POLYGON, bob.account.address],
-      { account: bob.account },
+    await resolver.write.setAddr([node, COIN_TYPE_POLYGON, bob.account.address], {
+      account: bob.account,
+    });
+    expect((await resolver.read.addr([node, COIN_TYPE_POLYGON])).toLowerCase()).to.equal(
+      bob.account.address.toLowerCase(),
     );
-    expect((await resolver.read.addr([node, COIN_TYPE_POLYGON])).toLowerCase())
-      .to.equal(bob.account.address.toLowerCase());
   });
 
   // ── Resolution resumes after the new owner sets a fresh record ────────────
@@ -239,24 +228,24 @@ describe("Transfer safety — control transfer + record invalidation (v2)", func
     const id = tokenIdFromLabel("resume");
 
     // alice's auto-set addr points at alice.
-    expect((await resolver.read.addr([node, COIN_TYPE_POLYGON])).toLowerCase())
-      .to.equal(alice.account.address.toLowerCase());
-
-    await registrar.write.transferFrom(
-      [alice.account.address, bob.account.address, id],
-      { account: alice.account },
+    expect((await resolver.read.addr([node, COIN_TYPE_POLYGON])).toLowerCase()).to.equal(
+      alice.account.address.toLowerCase(),
     );
+
+    await registrar.write.transferFrom([alice.account.address, bob.account.address, id], {
+      account: alice.account,
+    });
 
     // Immediately after transfer: empty (mis-send protection window).
     expect(await resolver.read.addr([node, COIN_TYPE_POLYGON])).to.equal("0x");
 
     // bob sets his own address; resolution resumes pointing at bob.
-    await resolver.write.setAddr(
-      [node, COIN_TYPE_POLYGON, bob.account.address],
-      { account: bob.account },
+    await resolver.write.setAddr([node, COIN_TYPE_POLYGON, bob.account.address], {
+      account: bob.account,
+    });
+    expect((await resolver.read.addr([node, COIN_TYPE_POLYGON])).toLowerCase()).to.equal(
+      bob.account.address.toLowerCase(),
     );
-    expect((await resolver.read.addr([node, COIN_TYPE_POLYGON])).toLowerCase())
-      .to.equal(bob.account.address.toLowerCase());
   });
 
   // ── History: version bumps, old version retained ──────────────────────────
@@ -269,19 +258,17 @@ describe("Transfer safety — control transfer + record invalidation (v2)", func
 
     const v0 = await resolver.read.recordVersions([node]);
 
-    await registrar.write.transferFrom(
-      [alice.account.address, bob.account.address, id],
-      { account: alice.account },
-    );
+    await registrar.write.transferFrom([alice.account.address, bob.account.address, id], {
+      account: alice.account,
+    });
 
     const v1 = await resolver.read.recordVersions([node]);
     expect(v1).to.equal(v0 + 1n);
 
     // A second hop bob → alice bumps again.
-    await registrar.write.transferFrom(
-      [bob.account.address, alice.account.address, id],
-      { account: bob.account },
-    );
+    await registrar.write.transferFrom([bob.account.address, alice.account.address, id], {
+      account: bob.account,
+    });
     const v2 = await resolver.read.recordVersions([node]);
     expect(v2).to.equal(v1 + 1n);
   });
@@ -297,8 +284,9 @@ describe("Transfer safety — control transfer + record invalidation (v2)", func
     // the internal controller→owner transfer, it must survive (controllers[from]
     // skip). Version should still be 0.
     expect(await resolver.read.recordVersions([node])).to.equal(0n);
-    expect((await resolver.read.addr([node, COIN_TYPE_POLYGON])).toLowerCase())
-      .to.equal(alice.account.address.toLowerCase());
+    expect((await resolver.read.addr([node, COIN_TYPE_POLYGON])).toLowerCase()).to.equal(
+      alice.account.address.toLowerCase(),
+    );
   });
 
   // ── Regression: burn does not bump a live node's version path ─────────────
