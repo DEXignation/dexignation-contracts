@@ -145,10 +145,14 @@ contract DXContributionSBT is ERC721, Ownable {
 
     string memory svg = _generateSVG(tokenId, cat);
     string memory json = string.concat(
-      "{'name':'DEXignation Contributor #", tokenId.toString(),
-      "','description':'", desc,
-      "','attributes':[{'trait_type':'category','value':'", cat, "'}],"
-      '"image":"data:image/svg+xml;base64,', Base64.encode(bytes(svg)), "'}"
+      '{"name":"DEXignation Contributor #', tokenId.toString(),
+      '","description":"', Strings.escapeJSON(desc),
+      '","attributes":[{"trait_type":"category","value":"',
+      Strings.escapeJSON(cat),
+      '"}],'
+      '"image":"data:image/svg+xml;base64,',
+      Base64.encode(bytes(svg)),
+      '"}'
     );
     return string.concat(
       "data:application/json;base64,",
@@ -159,6 +163,7 @@ contract DXContributionSBT is ERC721, Ownable {
   function _generateSVG(uint256 tokenId, string memory cat)
     internal pure returns (string memory)
   {
+    string memory safeCat = _escapeSVGText(cat);
     return string.concat(
       "<svg width='400' height='400' xmlns='http://www.w3.org/2000/svg'>"
       '<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">'
@@ -172,10 +177,34 @@ contract DXContributionSBT is ERC721, Ownable {
       tokenId.toString(),
       "</text>"
       '<text x="200" y="260" text-anchor="middle" font-family="monospace" font-size="16" fill="#94A3B8">',
-      cat,
+      safeCat,
       "</text>"
       '<text x="200" y="360" text-anchor="middle" font-family="monospace" font-size="11" fill="#2D3A48">DEXignation \xc2\xb7 Soulbound</text>'
       '</svg>'
     );
+  }
+
+  function _escapeSVGText(string memory input)
+    internal pure returns (string memory)
+  {
+    bytes memory value = bytes(input);
+    string memory out = "";
+    for (uint256 i = 0; i < value.length; i++) {
+      bytes1 c = value[i];
+      if (c == "&") {
+        out = string.concat(out, "&amp;");
+      } else if (c == "<") {
+        out = string.concat(out, "&lt;");
+      } else if (c == ">") {
+        out = string.concat(out, "&gt;");
+      } else if (c == '"') {
+        out = string.concat(out, "&quot;");
+      } else if (c == "'") {
+        out = string.concat(out, "&apos;");
+      } else {
+        out = string.concat(out, string(abi.encodePacked(c)));
+      }
+    }
+    return out;
   }
 }
