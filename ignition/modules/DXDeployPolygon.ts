@@ -40,6 +40,12 @@ const POLYGON_POL_USD_FEED = "0xAB594600376Ec9fD91F8e885dADF0CE036862dE0";
 const POLYGON_USDT = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F";
 const POLYGON_USDC = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359";
 
+const DXN_CAP = 100_000_000n * 10n ** 18n;
+const BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD";
+const STAKE_DISCOUNT_THRESHOLD = 100n * 10n ** 18n;
+const STAKE_DISCOUNT_BPS = 250n;
+const SUBNAME_PROTOCOL_FEE_BPS = 250n;
+
 export default buildModule("DXDeployPolygon", (m) => {
   const registry = m.contract("DXRegistry", []);
   const registrar = m.contract("DXRegistrar", [registry, TLD_NODE, TLD]);
@@ -55,6 +61,33 @@ export default buildModule("DXDeployPolygon", (m) => {
   // Reservation registry for trademark / premium handling on mainnet.
   // 메인넷의 상표/프리미엄 라벨 처리용 예약 레지스트리.
   const reservations = m.contract("DXReservations", []);
+
+  const contributionSBT = m.contract("DXContributionSBT", []);
+  const subnameRegistrar = m.contract("DXSubnameRegistrar", [
+    registry,
+    resolver,
+    m.getAccount(0),
+    SUBNAME_PROTOCOL_FEE_BPS,
+  ]);
+
+  const dxnToken = m.contract("DXNToken", ["DEXignation Token", "DXN", DXN_CAP]);
+  const dxnStaking = m.contract("DXNStaking", [dxnToken]);
+  const revenueDistributor = m.contract(
+    "RevenueDistributor",
+    [
+      [
+        m.getAccount(0),
+        dxnStaking,
+        m.getAccount(0),
+        BURN_ADDRESS,
+        m.getAccount(0),
+        5000,
+        3000,
+        1000,
+        1000,
+      ],
+    ],
+  );
 
   const grantTld = m.call(registry, "setSubnodeOwner", [zeroHash, TLD_LABEL_HASH, registrar], {
     id: "GrantTldToRegistrar",
@@ -84,6 +117,19 @@ export default buildModule("DXDeployPolygon", (m) => {
   });
   m.call(resolver, "setRegistrar", [registrar], { id: "SetResolverRegistrar" });
 
+  // Set stake discount and add reward assets.
+  m.call(controller, "setStakeDiscount", [
+    dxnStaking,
+    STAKE_DISCOUNT_THRESHOLD,
+    STAKE_DISCOUNT_BPS,
+  ], { id: "SetStakeDiscount" });
+  m.call(dxnStaking, "setNotifier", [revenueDistributor, true], {
+    id: "AllowRevenueDistributorNotifier",
+  });
+  m.call(revenueDistributor, "setStakingNotifier", [dxnStaking], {
+    id: "SetRevenueDistributorStakingNotifier",
+  });
+
   // setDiscountToken is left disabled by default. The owner activates it
   // once a partner/community token (e.g. MOL on Polygon) is chosen.
   //   할인 토큰은 기본 비활성. owner가 파트너/커뮤니티 토큰(예: Polygon MOL)을
@@ -97,5 +143,10 @@ export default buildModule("DXDeployPolygon", (m) => {
     reverseRegistrar,
     controller,
     reservations,
+    contributionSBT,
+    subnameRegistrar,
+    dxnToken,
+    dxnStaking,
+    revenueDistributor,
   };
 });

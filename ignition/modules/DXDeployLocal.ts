@@ -30,11 +30,29 @@ const RENT_PRICES = [
 
 const MOCK_POL_USD = 40_000_000n; // $0.40 with 8 decimals.
 
+const DXN_CAP = 100_000_000n * 10n ** 18n;
+const DXN_INITIAL_MINT = 1_000_000n * 10n ** 18n;
+const BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD";
+
+const STAKE_DISCOUNT_THRESHOLD = 100n * 10n ** 18n;
+const STAKE_DISCOUNT_BPS = 250n;
+
+const SUBNAME_PROTOCOL_FEE_BPS = 250n;
+
 export default buildModule("DXDeployLocal", (m) => {
   // ── Mocks ─────────────────────────────────────────────────────────────────
-  const mockUsdc = m.contract("MockERC20", ["Mock USDC", "USDC", 6], { id: "MockUSDC" });
-  const mockUsdt = m.contract("MockERC20", ["Mock USDT", "USDT", 6], { id: "MockUSDT" });
-  const mockPolUsd = m.contract("MockPriceOracle", [8, MOCK_POL_USD], { id: "MockPolUsd" });
+  const mockUsdc = m.contract("MockERC20", ["Mock USDC", "tUSDC", 6], { 
+    id: "MockUSDC" 
+  });
+  const mockUsdt = m.contract("MockERC20", ["Mock USDT", "tUSDT", 6], {
+    id: "MockUSDT" 
+  });
+  const mockDiscountToken = m.contract("MockERC20", ["Mock Discount Token", "tDIS", 18], {
+    id: "MockDiscountToken" 
+  });
+  const mockPolUsd = m.contract("MockPriceOracle", [8, MOCK_POL_USD], {
+    id: "MockPolUsd" 
+  });
 
   // ── Core protocol ─────────────────────────────────────────────────────────
   const registry = m.contract("DXRegistry", []);
@@ -46,6 +64,31 @@ export default buildModule("DXDeployLocal", (m) => {
 
   // ── Optional add-ons ──────────────────────────────────────────────────────
   const reservations = m.contract("DXReservations", []);
+  const contributionSBT = m.contract("DXContributionSBT", []);
+  const subnameRegistrar = m.contract("DXSubnameRegistrar", [
+    registry,
+    resolver,
+    m.getAccount(0),
+    SUBNAME_PROTOCOL_FEE_BPS,
+  ]);
+  const dxnToken = m.contract("DXNToken", ["DEXignation Token", "DXN", DXN_CAP]);
+  const dxnStaking = m.contract("DXNStaking", [dxnToken]);
+  const revenueDistributor = m.contract(
+    "RevenueDistributor",
+    [
+      [
+        m.getAccount(0),
+        dxnStaking,
+        m.getAccount(0),
+        BURN_ADDRESS,
+        m.getAccount(0),
+        5000,
+        3000,
+        1000,
+        1000,
+      ],
+    ],
+  );
 
   // ── Wiring ────────────────────────────────────────────────────────────────
   const grantTld = m.call(registry, "setSubnodeOwner", [zeroHash, TLD_LABEL_HASH, registrar], {
@@ -62,6 +105,19 @@ export default buildModule("DXDeployLocal", (m) => {
   m.call(controller, "setAllowedPaymentToken", [mockUsdc, true], { id: "AllowUSDC" });
   m.call(controller, "setAllowedPaymentToken", [mockUsdt, true], { id: "AllowUSDT" });
   m.call(controller, "setReservations", [reservations], { id: "WireReservations" });
+  m.call(controller, "setStakeDiscount", [
+    dxnStaking,
+    STAKE_DISCOUNT_THRESHOLD,
+    STAKE_DISCOUNT_BPS,
+  ], { id: "SetStakeDiscount" });
+  m.call(dxnStaking, "addRewardAsset", [mockUsdc], { id: "AddUsdcRewardAsset" });
+  m.call(dxnStaking, "addRewardAsset", [mockUsdt], { id: "AddUsdtRewardAsset" });
+  m.call(dxnStaking, "setNotifier", [revenueDistributor, true], {
+    id: "AllowRevenueDistributorNotifier",
+  });
+  m.call(revenueDistributor, "setStakingNotifier", [dxnStaking], {
+    id: "SetRevenueDistributorStakingNotifier",
+  });
 
   // ── v2: registrar ↔ resolver wiring for transfer-time record invalidation ──
   // setResolver: registrar stores the resolver (registry baseNode resolver +
@@ -74,6 +130,21 @@ export default buildModule("DXDeployLocal", (m) => {
   });
   m.call(resolver, "setRegistrar", [registrar], { id: "SetResolverRegistrar" });
 
+  // ── Mint mock tokens ──────────────────────────────────────────────────────
+  // USDC/USDT use 6 decimals; DISCOUNT uses 18.
+  m.call(mockUsdc, "mint", [m.getAccount(0), 1000n * 10n ** 6n], {
+    id: "MintUsdc",
+  });
+  m.call(mockUsdt, "mint", [m.getAccount(0), 1000n * 10n ** 6n], {
+    id: "MintUsdt",
+  });
+  m.call(mockDiscountToken, "mint", [m.getAccount(0), 1000n * 10n ** 18n], {
+    id: "MintDiscountToken",
+  });
+  m.call(dxnToken, "mint", [m.getAccount(0), DXN_INITIAL_MINT], {
+    id: "MintDxn",
+  });
+
   return {
     registry,
     registrar,
@@ -82,8 +153,14 @@ export default buildModule("DXDeployLocal", (m) => {
     reverseRegistrar,
     controller,
     reservations,
+    contributionSBT,
+    subnameRegistrar,
+    dxnToken,
+    dxnStaking,
+    revenueDistributor,
     mockUsdc,
     mockUsdt,
+    mockDiscountToken,
     mockPolUsd,
   };
 });
