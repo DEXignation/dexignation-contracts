@@ -24,6 +24,7 @@
     "lint:fix": "solhint 'contracts/**/*.sol' --fix && prettier --write '{contracts,test,ignition,scripts}/**/*.{ts,sol}'",
     "format": "prettier --write '{contracts,test,ignition,scripts}/**/*.{ts,sol,json,md}'",
     "deploy:local": "hardhat ignition deploy ignition/modules/DXDeployLocal.ts --network localhost",
+    "deploy:local-trading": "hardhat ignition deploy ignition/modules/DXDeployTrading.ts --network localhost",
     "deploy:amoy": "hardhat ignition deploy ignition/modules/DXDeployAmoy.ts --network amoy",
     "deploy:polygon": "hardhat ignition deploy ignition/modules/DXDeployPolygon.ts --network polygon",
     "deploy:polygon-trading": "hardhat ignition deploy ignition/modules/DXDeployTradingPolygon.ts --network polygon",

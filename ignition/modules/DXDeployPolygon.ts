@@ -41,9 +41,18 @@ const POLYGON_USDT = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F";
 const POLYGON_USDC = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359";
 
 const DXN_CAP = 100_000_000n * 10n ** 18n;
-const BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD";
+const DXN_PURCHASE_REWARD_BPS = 1000n;
+const DXN_PURCHASE_REWARD_PRICE_ATTO_USD = 2n * 10n ** 18n;
+
+const REVENUE_BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD";
+const REVENUE_DISTRIBUTOR_TREASURY_BPS = 6000;
+const REVENUE_DISTRIBUTOR_STAKING_BPS = 3000;
+const REVENUE_DISTRIBUTOR_BURN_BPS = 0;
+const REVENUE_DISTRIBUTOR_BUFFER_BPS = 1000;
+
 const STAKE_DISCOUNT_THRESHOLD = 100n * 10n ** 18n;
 const STAKE_DISCOUNT_BPS = 250n;
+
 const SUBNAME_PROTOCOL_FEE_BPS = 250n;
 
 export default buildModule("DXDeployPolygon", (m) => {
@@ -79,12 +88,12 @@ export default buildModule("DXDeployPolygon", (m) => {
         m.getAccount(0),
         dxnStaking,
         m.getAccount(0),
-        BURN_ADDRESS,
+        REVENUE_BURN_ADDRESS,
         m.getAccount(0),
-        5000,
-        3000,
-        1000,
-        1000,
+        REVENUE_DISTRIBUTOR_TREASURY_BPS,
+        REVENUE_DISTRIBUTOR_STAKING_BPS,
+        REVENUE_DISTRIBUTOR_BURN_BPS,
+        REVENUE_DISTRIBUTOR_BUFFER_BPS,
       ],
     ],
   );
@@ -117,7 +126,7 @@ export default buildModule("DXDeployPolygon", (m) => {
   });
   m.call(resolver, "setRegistrar", [registrar], { id: "SetResolverRegistrar" });
 
-  // Set stake discount and add reward assets.
+  // Set stake discount and set revenue distributor notifier
   m.call(controller, "setStakeDiscount", [
     dxnStaking,
     STAKE_DISCOUNT_THRESHOLD,
@@ -130,10 +139,15 @@ export default buildModule("DXDeployPolygon", (m) => {
     id: "SetRevenueDistributorStakingNotifier",
   });
 
-  // setDiscountToken is left disabled by default. The owner activates it
-  // once a partner/community token (e.g. MOL on Polygon) is chosen.
-  //   할인 토큰은 기본 비활성. owner가 파트너/커뮤니티 토큰(예: Polygon MOL)을
-  //   정한 뒤 별도 호출로 활성화.
+  // Set DXN purchase reward
+  m.call(dxnToken, "setMinter", [controller, true], { id: "AllowControllerDxnMint" });
+  m.call(controller, "setDxnReward", [
+    dxnToken,
+    DXN_PURCHASE_REWARD_BPS,
+    DXN_PURCHASE_REWARD_PRICE_ATTO_USD,
+  ], {
+    id: "SetDxnPurchaseReward",
+  });
 
   return {
     registry,

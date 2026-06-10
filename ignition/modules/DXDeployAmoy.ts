@@ -37,9 +37,18 @@ const RENT_PRICES = [
 const AMOY_POL_USD_FEED = "0x001382149eBa3441043c1c66972b4772963f5D43";
 
 const DXN_CAP = 100_000_000n * 10n ** 18n;
-const BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD";
+const DXN_PURCHASE_REWARD_BPS = 1000n;
+const DXN_PURCHASE_REWARD_PRICE_ATTO_USD = 2n * 10n ** 18n;
+
+const REVENUE_BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD";
+const REVENUE_DISTRIBUTOR_TREASURY_BPS = 6000;
+const REVENUE_DISTRIBUTOR_STAKING_BPS = 3000;
+const REVENUE_DISTRIBUTOR_BURN_BPS = 0;
+const REVENUE_DISTRIBUTOR_BUFFER_BPS = 1000;
+
 const STAKE_DISCOUNT_THRESHOLD = 100n * 10n ** 18n;
 const STAKE_DISCOUNT_BPS = 250n;
+
 const SUBNAME_PROTOCOL_FEE_BPS = 250n;
 
 export default buildModule("DXDeployAmoy", (m) => {
@@ -88,12 +97,12 @@ export default buildModule("DXDeployAmoy", (m) => {
         m.getAccount(0),
         dxnStaking,
         m.getAccount(0),
-        BURN_ADDRESS,
+        REVENUE_BURN_ADDRESS,
         m.getAccount(0),
-        5000,
-        3000,
-        1000,
-        1000,
+        REVENUE_DISTRIBUTOR_TREASURY_BPS,
+        REVENUE_DISTRIBUTOR_STAKING_BPS,
+        REVENUE_DISTRIBUTOR_BURN_BPS,
+        REVENUE_DISTRIBUTOR_BUFFER_BPS,
       ],
     ],
   );
@@ -126,7 +135,7 @@ export default buildModule("DXDeployAmoy", (m) => {
   });
   m.call(resolver, "setRegistrar", [registrar], { id: "SetResolverRegistrar" });
 
-  // Set stake discount and add reward assets.
+  // Set stake discount and set revenue distributor notifier
   m.call(controller, "setStakeDiscount", [
     dxnStaking,
     STAKE_DISCOUNT_THRESHOLD,
@@ -137,6 +146,16 @@ export default buildModule("DXDeployAmoy", (m) => {
   });
   m.call(revenueDistributor, "setStakingNotifier", [dxnStaking], {
     id: "SetRevenueDistributorStakingNotifier",
+  });
+
+  // Set DXN purchase reward
+  m.call(dxnToken, "setMinter", [controller, true], { id: "AllowControllerDxnMint" });
+  m.call(controller, "setDxnReward", [
+    dxnToken,
+    DXN_PURCHASE_REWARD_BPS,
+    DXN_PURCHASE_REWARD_PRICE_ATTO_USD,
+  ], {
+    id: "SetDxnPurchaseReward",
   });
 
   return {

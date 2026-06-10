@@ -32,7 +32,14 @@ const MOCK_POL_USD = 40_000_000n; // $0.40 with 8 decimals.
 
 const DXN_CAP = 100_000_000n * 10n ** 18n;
 const DXN_INITIAL_MINT = 1_000_000n * 10n ** 18n;
-const BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD";
+const DXN_PURCHASE_REWARD_BPS = 1000n;
+const DXN_PURCHASE_REWARD_PRICE_ATTO_USD = 2n * 10n ** 18n;
+
+const REVENUE_BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD";
+const REVENUE_DISTRIBUTOR_TREASURY_BPS = 6000;
+const REVENUE_DISTRIBUTOR_STAKING_BPS = 3000;
+const REVENUE_DISTRIBUTOR_BURN_BPS = 0;
+const REVENUE_DISTRIBUTOR_BUFFER_BPS = 1000;
 
 const STAKE_DISCOUNT_THRESHOLD = 100n * 10n ** 18n;
 const STAKE_DISCOUNT_BPS = 250n;
@@ -80,12 +87,12 @@ export default buildModule("DXDeployLocal", (m) => {
         m.getAccount(0),
         dxnStaking,
         m.getAccount(0),
-        BURN_ADDRESS,
+        REVENUE_BURN_ADDRESS,
         m.getAccount(0),
-        5000,
-        3000,
-        1000,
-        1000,
+        REVENUE_DISTRIBUTOR_TREASURY_BPS,
+        REVENUE_DISTRIBUTOR_STAKING_BPS,
+        REVENUE_DISTRIBUTOR_BURN_BPS,
+        REVENUE_DISTRIBUTOR_BUFFER_BPS,
       ],
     ],
   );
@@ -117,6 +124,14 @@ export default buildModule("DXDeployLocal", (m) => {
   });
   m.call(revenueDistributor, "setStakingNotifier", [dxnStaking], {
     id: "SetRevenueDistributorStakingNotifier",
+  });
+  m.call(dxnToken, "setMinter", [controller, true], { id: "AllowControllerDxnMint" });
+  m.call(controller, "setDxnReward", [
+    dxnToken,
+    DXN_PURCHASE_REWARD_BPS,
+    DXN_PURCHASE_REWARD_PRICE_ATTO_USD,
+  ], {
+    id: "SetDxnPurchaseReward",
   });
 
   // ── v2: registrar ↔ resolver wiring for transfer-time record invalidation ──
