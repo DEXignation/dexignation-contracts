@@ -20,7 +20,7 @@ pragma solidity ^0.8.28;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
-import {EVMCoinUtils, COIN_TYPE_DEFAULT, COIN_TYPE_ETH} from "../utils/EVMCoinUtils.sol";
+import {COIN_TYPE_DEFAULT, COIN_TYPE_ETH} from "../utils/EVMCoinUtils.sol";
 import {DXNamehash} from "../utils/DXNamehash.sol";
 
 interface IDXRegistry {
@@ -86,8 +86,6 @@ contract DXResolver is Ownable {
     // v1.1: Supported coin types (SLIP-44 + ENSIP-11)
     // coinType => name. EVM 체인은 ENSIP-11(0x80000000 | chainId), non-EVM은 SLIP-44.
     mapping(uint256 => string) public supportedCoins;
-
-    using EVMCoinUtils for uint256;
 
     // ── Record length limits (EIP-1577 / EIP-634) ──────────────────────────
     uint256 public constant MAX_CONTENTHASH_LENGTH = 128;
@@ -321,8 +319,6 @@ contract DXResolver is Ownable {
         uint256 coinType,
         bytes calldata addrBytes
     ) external onlyTokenOwner(node) {
-        require(bytes(supportedCoins[coinType]).length > 0, "Unsupported coin type");
-        _validateAddress(coinType, addrBytes);
         addresses[node][_ver(node)][coinType] = addrBytes;
         emit AddressChanged(node, coinType, addrBytes);
     }
@@ -579,7 +575,7 @@ contract DXResolver is Ownable {
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // V1.1 UTILITY FUNCTIONS: Validation & Support
+    // V1.1 UTILITY FUNCTIONS: Support Metadata
     // ════════════════════════════════════════════════════════════════════════
 
     /// @notice Check if coin type is supported
@@ -590,60 +586,6 @@ contract DXResolver is Ownable {
     /// @notice Get supported coin name
     function getCoinName(uint256 coinType) external view returns (string memory) {
         return supportedCoins[coinType];
-    }
-
-    /// @notice Validate address format for coin type
-    function _validateAddress(uint256 coinType, bytes calldata addrBytes) internal pure {
-        // EVM addresses (ENSIP-11 + SLIP-44 ETH): single 20-byte format.
-        // EVMCoinUtils가 0x80000000 비트와 SLIP-44 60(ETH)을 모두 EVM으로 인정.
-        if (EVMCoinUtils.isEVMCoinType(coinType)) {
-            require(addrBytes.length == 20, "EVM address must be 20 bytes");
-            return;
-        }
-
-        // Bitcoin: 20 bytes (raw)
-        if (coinType == 0) {
-            require(addrBytes.length == 20, "Bitcoin address must be 20 bytes");
-            return;
-        }
-
-        // Dogecoin, Litecoin: 20 bytes
-        if (coinType == 3 || coinType == 2) {
-            require(addrBytes.length == 20, "Address must be 20 bytes");
-            return;
-        }
-
-        // Solana: 32 bytes
-        if (coinType == 501) {
-            require(addrBytes.length == 32, "Solana address must be 32 bytes");
-            return;
-        }
-
-        // Cosmos: 20 bytes (bech32 prefix on-chain validation 생략, off-chain에서 검증)
-        if (coinType == 118) {
-            require(addrBytes.length >= 20, "Cosmos address must be at least 20 bytes");
-            return;
-        }
-
-        // Tron: 20 bytes
-        if (coinType == 195) {
-            require(addrBytes.length == 20, "Tron address must be 20 bytes");
-            return;
-        }
-
-        // TON: 32 bytes
-        if (coinType == 607) {
-            require(addrBytes.length == 32, "TON address must be 32 bytes");
-            return;
-        }
-
-        // Ripple: 20 bytes
-        if (coinType == 144) {
-            require(addrBytes.length == 20, "Ripple address must be 20 bytes");
-            return;
-        }
-
-        revert("Unknown coin type");
     }
 
     /// @notice String equality check
