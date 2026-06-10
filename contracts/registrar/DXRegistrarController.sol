@@ -70,6 +70,12 @@ interface IStakingBalance {
   function stakedOf(address staker) external view returns (uint256);
 }
 
+/// @dev Minimal DXN mint interface for purchase rewards.
+///      구매 보상 DXN mint용 최소 인터페이스.
+interface IDXNRewardToken {
+  function mint(address to, uint256 amount) external;
+}
+
 /// @title  DXRegistrarController
 /// @notice User-facing entry point for registering and renewing names.
 ///         Implements commit-reveal to mitigate front-running, supports
@@ -193,6 +199,31 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   ///         스테이커 할인율(만분율). setter에서 상한 강제.
   uint256 public stakeDiscountBps;
 
+  /// @notice DXN token minted back to the payer for paid registrations.
+  ///         The reward is computed from the final USD-denominated domain
+  ///         price after premium and discounts, independent of whether the
+  ///         user paid in native currency or an allowed stablecoin. Zero
+  ///         address disables rewards.
+  ///         유료 등록 시 결제자에게 보상으로 mint되는 DXN 토큰.
+  ///         보상은 결제 수단과 무관하게 premium/할인 적용 후 최종 USD 가격
+  ///         기준으로 계산된다. 0 주소면 보상 비활성.
+  IDXNRewardToken public dxnRewardToken;
+
+  /// @notice Reward rate in basis points of the final USD domain price.
+  ///         최종 USD 도메인 가격 기준 보상율(만분율).
+  uint256 public dxnRewardBps;
+
+  /// @notice Accounting price used to convert the USD reward into DXN units,
+  ///         denominated in attoUSD. Owner-configurable via `setDxnReward`.
+  ///         Example: $2.00 is `2e18`.
+  ///         USD 보상액을 DXN 수량으로 환산할 때 쓰는 회계 가격(attoUSD).
+  ///         `setDxnReward`로 owner가 변경 가능. 예: $2.00 = `2e18`.
+  uint256 public dxnRewardPriceAttoUSD;
+
+  /// @notice Maximum purchase reward rate. 10000 bps = 100%.
+  ///         구매 보상율 상한. 10000 bps = 100%.
+  uint256 public constant MAX_DXN_REWARD_BPS = 10000;
+
   /// @dev commitment hash => timestamp at which it was committed.
   ///      commitment 해시 => commit된 시각.
   mapping(bytes32 commitment => uint256 timestamp) public commitments;
@@ -212,9 +243,21 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     uint256 stakeDiscountThreshold,
     uint256 stakeDiscountBps
   );
+  event DxnRewardConfigured(
+    address indexed dxnToken,
+    uint256 rewardBps,
+    uint256 rewardPriceAttoUSD
+  );
+  event DxnRewardMinted(
+    address indexed recipient,
+    uint256 paidAttoUSD,
+    uint256 rewardAmount
+  );
 
   error LabelReserved(string label);
   error DiscountRateTooHigh(uint256 requested, uint256 max);
+  error RewardRateTooHigh(uint256 requested, uint256 max);
+  error RewardPriceIsZero();
   error RequiredHoldAmountIsZero();
 
   /// @dev Thrown when an ERC-20 transferFrom delivers less than the
@@ -301,6 +344,39 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     requiredHoldAmount = _requiredHoldAmount;
     discountBps = _discountBps;
     emit DiscountConfigured(_discountToken, _requiredHoldAmount, _discountBps);
+  }
+
+  /// @notice Configure DXN rewards for paid domain registrations. Owner-only.
+  ///         유료 도메인 등록 DXN 보상 설정. 오너 전용.
+  ///
+  ///         With `_rewardBps = 1000` and `_rewardPriceAttoUSD = 2e18`, a
+  ///         $8 registration mints 0.4 DXN: 10% of $8 is $0.80, and
+  ///         $0.80 / $2.00 = 0.4.
+  ///
+  ///         `_rewardBps = 1000`, `_rewardPriceAttoUSD = 2e18` 기준으로
+  ///         $8 등록은 0.4 DXN을 mint한다: $8의 10% = $0.80,
+  ///         $0.80 / $2.00 = 0.4.
+  function setDxnReward(
+    address _dxnToken,
+    uint256 _rewardBps,
+    uint256 _rewardPriceAttoUSD
+  ) external onlyOwner {
+    if (_rewardBps > MAX_DXN_REWARD_BPS) {
+      revert RewardRateTooHigh(_rewardBps, MAX_DXN_REWARD_BPS);
+    }
+
+    if (_dxnToken == address(0)) {
+      dxnRewardToken = IDXNRewardToken(address(0));
+      dxnRewardBps = 0;
+      dxnRewardPriceAttoUSD = 0;
+    } else {
+      if (_rewardPriceAttoUSD == 0) revert RewardPriceIsZero();
+      dxnRewardToken = IDXNRewardToken(_dxnToken);
+      dxnRewardBps = _rewardBps;
+      dxnRewardPriceAttoUSD = _rewardPriceAttoUSD;
+    }
+
+    emit DxnRewardConfigured(_dxnToken, dxnRewardBps, dxnRewardPriceAttoUSD);
   }
 
   /// @notice Compute the post-discount price for `user`. If the discount
@@ -582,6 +658,7 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     if (!available(label)) revert NameNotAvailable(label);
 
     uint256 expires = _executeRegister(label, labelhash, owner, duration, resolver);
+    _mintDxnReward(label, duration, msg.sender);
 
     emit NameRegistered(label, labelhash, owner, price_, expires);
 
@@ -648,6 +725,7 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     _safeReceiveExactly(IERC20(paymentToken), msg.sender, amount);
 
     uint256 expires = _executeRegister(label, labelhash, owner, duration, resolver);
+    _mintDxnReward(label, duration, msg.sender);
 
     emit NameRegisteredWithToken(label, labelhash, owner, paymentToken, amount, expires);
   }
@@ -950,6 +1028,35 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     // 4. Transfer the ERC-721 NFT to the real owner.
     //    4. ERC-721 NFT를 실제 소유자에게 이전.
     registrar.transferFrom(address(this), owner, uint256(labelhash));
+  }
+
+  /// @dev Compute the final paid USD price and mint the matching DXN reward.
+  ///      최종 결제 USD 가격을 계산하고 그에 맞는 DXN 보상을 mint.
+  function _mintDxnReward(
+    string calldata label,
+    uint256 duration,
+    address payer
+  ) internal {
+    IDXNRewardToken rewardToken = dxnRewardToken;
+    uint256 rewardBps = dxnRewardBps;
+    uint256 rewardPrice = dxnRewardPriceAttoUSD;
+    if (address(rewardToken) == address(0) || rewardBps == 0 || rewardPrice == 0) {
+      return;
+    }
+
+    uint256 paidAttoUSD = _applyDiscount(
+      _priceWithPremiumAttoUSD(label, duration),
+      payer
+    );
+    if (paidAttoUSD == 0) return;
+
+    uint256 rewardAmount = (
+      paidAttoUSD * rewardBps * 1e18
+    ) / (10000 * rewardPrice);
+    if (rewardAmount == 0) return;
+
+    rewardToken.mint(payer, rewardAmount);
+    emit DxnRewardMinted(payer, paidAttoUSD, rewardAmount);
   }
 
   /// @dev Native transfer via low-level `call`. Reverts on failure.
