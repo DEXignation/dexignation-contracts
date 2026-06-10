@@ -625,6 +625,14 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
 
   uint256 private constant ONE_YEAR_SECS = 365 days;
 
+  /// @dev SVG <text> font stack. Names broad-coverage CJK fonts before the
+  ///      generic fallback so less-common Chinese/CJK glyphs render instead of
+  ///      tofu (□) on the viewing platform.
+  ///      SVG <text> 폰트 스택. generic 폴백 앞에 광범위 CJK 폰트를 명시해
+  ///      상용 빈도가 낮은 한자가 두부(□)로 깨지지 않도록 한다.
+  string private constant _FONT_FAMILY =
+    "'Noto Sans CJK SC','Noto Sans SC','PingFang SC','Microsoft YaHei','Hiragino Sans GB','Source Han Sans SC',sans-serif";
+
   /// @dev Map a guaranteed duration (seconds) to a tier index 0..4:
   ///      0=charcoal (<1y), 1=mud (<3y), 2=burnt orange (<5y),
   ///      3=yellow (<10y), 4=gold (>=10y). Used to ratchet `highestTier`.
@@ -834,7 +842,7 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
       nameText = string.concat(
         nameText,
         '<text x="200" y="', _u(y),
-        '" text-anchor="middle" font-family="sans-serif" font-weight="700" font-size="',
+        '" text-anchor="middle" font-family="', _FONT_FAMILY, '" font-weight="700" font-size="',
         _u(fontSize), '" fill="', textColor, '">',
         lines[i],
         '</text>'
@@ -846,7 +854,7 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     uint256 sufY = blockTop + lineCount * lineH + 30;
     string memory suffix = string.concat(
       '<text x="200" y="', _u(sufY),
-      '" text-anchor="middle" font-family="sans-serif" font-weight="400" font-size="20" fill="',
+      '" text-anchor="middle" font-family="', _FONT_FAMILY, '" font-weight="400" font-size="20" fill="',
       textColor, '" fill-opacity="0.6">',
       dotTld,
       '</text>'
