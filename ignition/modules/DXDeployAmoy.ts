@@ -49,6 +49,11 @@ const REVENUE_DISTRIBUTOR_BUFFER_BPS = 1000;
 const STAKE_DISCOUNT_THRESHOLD = 100n * 10n ** 18n;
 const STAKE_DISCOUNT_BPS = 250n;
 
+// Subname commerce (A3): protocol fee per subname sale, routed to the
+// RevenueDistributor. 500 bps = 5% (cap MAX_FEE_BPS = 2000 / 20%).
+//   서브네임 판매당 프로토콜 수수료(RevenueDistributor로). 500 bps = 5%.
+const SUBNAME_PROTOCOL_FEE_BPS = 500n;
+
 export default buildModule("DXDeployAmoy", (m) => {
   // Mock stablecoins on Amoy (testnet only; the user mints freely).
   // Amoy 테스트용 mock 스테이블코인 (자유 mint 가능).
@@ -99,6 +104,21 @@ export default buildModule("DXDeployAmoy", (m) => {
     ],
   );
 
+  // Subname commerce module (A3). Default resolver = the protocol resolver;
+  // fee recipient = the RevenueDistributor. Authorised as a sale module below
+  // (AllowSubnameSaleModule). Each parent owner must additionally delegate at
+  // runtime via registry.setApprovalForAll(subnameRegistrar, true) before
+  // selling subnames.
+  //   서브네임 커머스 모듈. 기본 resolver=프로토콜 resolver, 수수료 수신처=
+  //   RevenueDistributor. 아래에서 판매 모듈로 인가. 각 부모는 판매 전 런타임에
+  //   setApprovalForAll로 위임해야 한다.
+  const subnameRegistrar = m.contract("DXSubnameRegistrar", [
+    registry,
+    resolver,
+    revenueDistributor,
+    SUBNAME_PROTOCOL_FEE_BPS,
+  ]);
+
   const grantTld = m.call(registry, "setSubnodeOwner", [zeroHash, TLD_LABEL_HASH, registrar], {
     id: "GrantTldToRegistrar",
   });
@@ -131,6 +151,15 @@ export default buildModule("DXDeployAmoy", (m) => {
   });
   m.call(resolver, "setRecordInvalidator", [registry, true], {
     id: "AllowRegistryRecordInvalidator",
+  });
+
+  // v2: authorise the subname module as a registry sale module so it may call
+  // issueSubnodeRecordLocked (sale-locked subname issuance). Root-node (0x0)
+  // owner only — the deployer (account 0) holds it.
+  //   서브네임 모듈을 registry 판매 모듈로 인가(판매-잠금 발급 권한). 루트(0x0)
+  //   소유자=배포자만 호출.
+  m.call(registry, "setSaleModule", [subnameRegistrar, true], {
+    id: "AllowSubnameSaleModule",
   });
 
   // Set stake discount and set revenue distributor notifier
@@ -168,6 +197,7 @@ export default buildModule("DXDeployAmoy", (m) => {
     dxnToken,
     dxnStaking,
     revenueDistributor,
+    subnameRegistrar,
     mockUsdc,
     mockUsdt,
     mockDiscountToken,

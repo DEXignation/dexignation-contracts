@@ -40,6 +40,13 @@ const RENT_PRICES = [
 
 const MOCK_POL_USD = 40_000_000n; // $0.40 with 8 decimals.
 
+// Subname commerce (A3): protocol fee per subname sale. On this mock module
+// there is no RevenueDistributor, so the fee recipient is the deployer
+// (account 0) — fine for testnet verification. 500 bps = 5%.
+//   서브네임 판매당 프로토콜 수수료. 이 mock 모듈엔 RevenueDistributor가 없으므로
+//   수수료 수신처는 배포자(account 0) — 테스트넷 검증용으로 무방. 500 bps = 5%.
+const SUBNAME_PROTOCOL_FEE_BPS = 500n;
+
 export default buildModule("DXDeployAmoyMock", (m) => {
   // Mock stablecoins + mock price feed (Amoy real feed is dead).
   const mockUsdc = m.contract("MockERC20", ["Test USDC", "tUSDC", 6], { id: "TestUSDC" });
@@ -53,6 +60,18 @@ export default buildModule("DXDeployAmoyMock", (m) => {
   const reverseRegistrar = m.contract("DXReverseRegistrar", [registry, resolver]);
   const controller = m.contract("DXRegistrarController", [registrar, registry, priceOracle]);
   const reservations = m.contract("DXReservations", []);
+
+  // Subname commerce module (A3). No RevenueDistributor here, so the fee
+  // recipient is the deployer (account 0). Authorised as a sale module below;
+  // each parent owner must delegate via setApprovalForAll before selling.
+  //   서브네임 커머스 모듈. RevenueDistributor가 없어 수수료 수신처는 배포자.
+  //   아래에서 판매 모듈로 인가. 부모는 판매 전 setApprovalForAll로 위임.
+  const subnameRegistrar = m.contract("DXSubnameRegistrar", [
+    registry,
+    resolver,
+    m.getAccount(0),
+    SUBNAME_PROTOCOL_FEE_BPS,
+  ]);
 
   const grantTld = m.call(registry, "setSubnodeOwner", [zeroHash, TLD_LABEL_HASH, registrar], {
     id: "GrantTldToRegistrar",
@@ -76,9 +95,22 @@ export default buildModule("DXDeployAmoyMock", (m) => {
     after: [grantTld],
   });
   m.call(resolver, "setRegistrar", [registrar], { id: "SetResolverRegistrar" });
+  m.call(registry, "setRecordInvalidator", [resolver], {
+    id: "SetRegistryRecordInvalidator",
+  });
+  m.call(resolver, "setRecordInvalidator", [registry, true], {
+    id: "AllowRegistryRecordInvalidator",
+  });
+
+  // v2: authorise the subname module as a registry sale module (root-node owner
+  // = deployer). Lets it call issueSubnodeRecordLocked.
+  //   서브네임 모듈을 판매 모듈로 인가(루트 소유자=배포자).
+  m.call(registry, "setSaleModule", [subnameRegistrar, true], {
+    id: "AllowSubnameSaleModule",
+  });
 
   return {
     registry, registrar, resolver, priceOracle, reverseRegistrar,
-    controller, reservations, mockUsdc, mockUsdt, mockPolUsd,
+    controller, reservations, subnameRegistrar, mockUsdc, mockUsdt, mockPolUsd,
   };
 });

@@ -22,6 +22,14 @@
 //     `isExpired` 함수가 추가되었다.
 //   - `NameExpired` / `Unauthorized` custom errors.
 //     커스텀 에러 `NameExpired` / `Unauthorized` 가 추가되었다.
+//   - Sale-lock subname commerce (v2): `issueSubnodeRecordLocked`,
+//     `setSaleModule`, `subnodeSaleLocked`, `saleModule`. A subname issued
+//     through an authorised sale module is sale-locked: the parent cannot
+//     reassign or revoke it while it is live, so a sold subname stays the
+//     buyer's until it expires.
+//     판매-잠금 서브네임 커머스(v2). 인가된 판매 모듈로 발급된 서브네임은
+//     판매-잠금되어, 라이브 동안 부모가 재지정·회수할 수 없다 — 판 서브네임은
+//     만료 전까지 구매자 소유.
 // ─────────────────────────────────────────────────────────────────────────────
 
 pragma solidity ^0.8.28;
@@ -92,6 +100,19 @@ interface IDXRegistry {
     address indexed revokedTo
   );
 
+  /// @dev Emitted when a sale module issues a subnode with a sale-lock.
+  ///      커머스 모듈이 판매 잠금과 함께 서브노드를 발급할 때.
+  event SubnodeIssuedLocked(
+    bytes32 indexed node,
+    bytes32 indexed subnode,
+    string label,
+    address indexed recipient
+  );
+
+  /// @dev Emitted when an address is authorised/deauthorised as a sale module.
+  ///      판매 모듈 인가/해제 시.
+  event SaleModuleSet(address indexed module, bool allowed);
+
   // ── Errors ────────────────────────────────────────────────────────────────
 
   /// @dev Caller is not authorised to mutate the node.
@@ -117,6 +138,16 @@ interface IDXRegistry {
   /// @dev Subnode does not exist.
   ///      서브노드가 존재하지 않음.
   error SubnodeNotFound(bytes32 subnode);
+
+  /// @dev A live (non-expired) sale-locked subnode cannot be reassigned or
+  ///      revoked by the parent. It is the buyer's until it expires.
+  ///      라이브(미만료) 판매-잠금 서브노드는 부모가 재지정/회수할 수 없음.
+  ///      만료 전까지 구매자 소유.
+  error SubnodeSaleLocked(bytes32 subnode);
+
+  /// @dev Caller is not an authorised sale module.
+  ///      호출자가 인가된 판매 모듈이 아님.
+  error NotSaleModule(address caller);
 
   // ── Functions ─────────────────────────────────────────────────────────────
 
@@ -189,6 +220,36 @@ interface IDXRegistry {
     string calldata label,
     address resolver
   ) external returns (bytes32);
+
+  // ── Sale-lock subname commerce (v2) / 판매-잠금 서브네임 커머스 ──────────────
+
+  /// @notice Authorised sale module only. Issues a subnode AND marks it
+  ///         sale-locked so the parent cannot reassign/revoke it while live.
+  ///         The child inherits parent expiry; once it expires the lock no
+  ///         longer protects it and the label becomes re-issuable.
+  ///         인가된 판매 모듈 전용. 서브노드를 발급하고 판매-잠금을 표시한다.
+  ///         라이브 동안 부모가 재지정/회수 불가. 자식은 부모 만료를 상속하며,
+  ///         만료되면 잠금 보호가 사라지고 라벨은 재발급 가능해진다.
+  function issueSubnodeRecordLocked(
+    bytes32 node,
+    string calldata label,
+    address owner,
+    address resolver
+  ) external returns (bytes32);
+
+  /// @notice Root-owner only. Authorise/deauthorise a sale module that may
+  ///         call `issueSubnodeRecordLocked`.
+  ///         루트 소유자 전용. `issueSubnodeRecordLocked` 호출 가능한 판매
+  ///         모듈을 인가/해제.
+  function setSaleModule(address module, bool allowed) external;
+
+  /// @notice True if `subnode` was issued by a sale module (sale-locked).
+  ///         `subnode`가 판매 모듈로 발급되었는지(판매-잠금).
+  function subnodeSaleLocked(bytes32 subnode) external view returns (bool);
+
+  /// @notice True if `module` is an authorised sale module.
+  ///         `module`이 인가된 판매 모듈인지.
+  function saleModule(address module) external view returns (bool);
 
   function recordExists(bytes32 node) external view returns (bool);
 }

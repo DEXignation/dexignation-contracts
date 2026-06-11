@@ -63,3 +63,4 @@ tmp/
 secrets/
 **/private-keys.json
 ignition/deployments/*.backup-*
+ignition/deployments/

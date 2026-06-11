@@ -44,6 +44,11 @@ const REVENUE_DISTRIBUTOR_BUFFER_BPS = 1000;
 const STAKE_DISCOUNT_THRESHOLD = 100n * 10n ** 18n;
 const STAKE_DISCOUNT_BPS = 250n;
 
+// Subname commerce (A3): protocol fee taken from each subname sale, routed to
+// the RevenueDistributor. 500 bps = 5% (cap is MAX_FEE_BPS = 2000 / 20%).
+//   서브네임 판매당 프로토콜 수수료(RevenueDistributor로). 500 bps = 5%.
+const SUBNAME_PROTOCOL_FEE_BPS = 500n;
+
 export default buildModule("DXDeployLocal", (m) => {
   // ── Mocks ─────────────────────────────────────────────────────────────────
   const mockUsdc = m.contract("MockERC20", ["Mock USDC", "tUSDC", 6], { 
@@ -89,6 +94,19 @@ export default buildModule("DXDeployLocal", (m) => {
     ],
   );
 
+  // Subname commerce module (A3). Default resolver = the protocol resolver;
+  // fee recipient = the RevenueDistributor. Must be authorised as a sale module
+  // (see "AllowSubnameSaleModule" below) AND delegated by each parent owner
+  // (registry.setApprovalForAll at runtime) before it can issue subnames.
+  //   서브네임 커머스 모듈. 기본 resolver=프로토콜 resolver, 수수료 수신처=
+  //   RevenueDistributor. 발급하려면 판매 모듈 인가(아래) + 각 부모의 위임 필요.
+  const subnameRegistrar = m.contract("DXSubnameRegistrar", [
+    registry,
+    resolver,
+    revenueDistributor,
+    SUBNAME_PROTOCOL_FEE_BPS,
+  ]);
+
   // ── Wiring ────────────────────────────────────────────────────────────────
   const grantTld = m.call(registry, "setSubnodeOwner", [zeroHash, TLD_LABEL_HASH, registrar], {
     id: "GrantTldToRegistrar",
@@ -127,10 +145,6 @@ export default buildModule("DXDeployLocal", (m) => {
   });
 
   // ── v2: registrar ↔ resolver wiring for transfer-time record invalidation ──
-  // setResolver: registrar stores the resolver (registry baseNode resolver +
-  //   local recordResolver) so _update can bump record versions on transfer.
-  // setRegistrar: resolver authorises the registrar to call bumpVersion.
-  //   전송 시 레코드 무효화를 위해 registrar↔resolver를 상호 연결.
   m.call(registrar, "setResolver", [resolver], {
     id: "SetRegistrarResolver",
     after: [grantTld],
@@ -143,8 +157,15 @@ export default buildModule("DXDeployLocal", (m) => {
     id: "AllowRegistryRecordInvalidator",
   });
 
+  // ── v2: subname sale-lock commerce wiring ──────────────────────────────────
+  // Authorise the subname module as a registry sale module so it may call
+  // issueSubnodeRecordLocked. Root-node (0x0) owner only — deployer (account 0).
+  //   서브네임 모듈을 registry 판매 모듈로 인가. 루트(0x0) 소유자=배포자.
+  m.call(registry, "setSaleModule", [subnameRegistrar, true], {
+    id: "AllowSubnameSaleModule",
+  });
+
   // ── Mint mock tokens ──────────────────────────────────────────────────────
-  // USDC/USDT use 6 decimals; DISCOUNT uses 18.
   m.call(mockUsdc, "mint", [m.getAccount(0), 1000n * 10n ** 6n], {
     id: "MintUsdc",
   });
@@ -170,6 +191,7 @@ export default buildModule("DXDeployLocal", (m) => {
     dxnToken,
     dxnStaking,
     revenueDistributor,
+    subnameRegistrar,
     mockUsdc,
     mockUsdt,
     mockDiscountToken,

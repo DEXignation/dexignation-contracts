@@ -31,6 +31,18 @@
 //   4. Custom errors (`Unauthorized`, `NameExpired`) replace `require()` for
 //      gas efficiency and better revert decoding.
 //      가스 효율과 디코딩 편의를 위해 `require` 대신 커스텀 에러를 사용한다.
+//   5. Sale-lock subname commerce (v2). An authorised sale module may issue a
+//      subnode via `issueSubnodeRecordLocked`, which marks it sale-locked.
+//      While a sale-locked subnode is live (non-expired), the parent owner
+//      cannot `reassignSubnodeRecord` or `revokeSubnodeRecord` it — a sold
+//      subname stays the buyer's until it expires. Parent-direct (unlocked)
+//      issuance via `issueSubnodeRecord` is unchanged and remains freely
+//      reassignable/revocable.
+//      판매-잠금 서브네임 커머스(v2). 인가된 판매 모듈은
+//      `issueSubnodeRecordLocked`로 서브노드를 발급하며 판매-잠금이 표시된다.
+//      판매-잠금 서브노드가 라이브(미만료)인 동안 부모는 재지정/회수할 수
+//      없다 — 판 서브네임은 만료 전까지 구매자 소유. 부모 직접(무잠금) 발급
+//      (`issueSubnodeRecord`)은 기존과 동일하게 자유로이 재지정·회수 가능.
 // ─────────────────────────────────────────────────────────────────────────────
 
 pragma solidity ^0.8.28;
@@ -69,6 +81,22 @@ contract DXRegistry is IDXRegistry {
   /// @notice Optional resolver-like contract that can invalidate stale records.
   IRecordInvalidator public recordInvalidator;
 
+  /// @notice subnode => sale-locked. True when a subnode was issued through an
+  ///         authorised sale module (`issueSubnodeRecordLocked`). While the
+  ///         subnode is live, this blocks parent reassign/revoke so a sold
+  ///         subname stays the buyer's. Cleared when the subnode is re-issued
+  ///         (parent-direct) after expiry.
+  ///         서브노드 => 판매-잠금. 인가된 판매 모듈로 발급되면 true. 라이브
+  ///         동안 부모의 재지정/회수를 차단해 판 서브네임을 보호한다. 만료 후
+  ///         부모 직접 재발급 시 해제된다.
+  mapping(bytes32 => bool) public override subnodeSaleLocked;
+
+  /// @notice module => authorised. Sale modules permitted to call
+  ///         `issueSubnodeRecordLocked`. Managed by the root node owner.
+  ///         모듈 => 인가 여부. `issueSubnodeRecordLocked` 호출이 허용된 판매
+  ///         모듈. 루트 노드 소유자가 관리.
+  mapping(address => bool) public override saleModule;
+
   /// @notice Root node owner is set to the deployer. The deployer should
   ///         transfer ownership of each TLD (e.g. `.dex`) to its registrar
   ///         shortly after deployment.
@@ -94,6 +122,15 @@ contract DXRegistry is IDXRegistry {
     _;
   }
 
+  /// @dev Reverts unless `msg.sender` is an authorised sale module.
+  ///      호출자가 인가된 판매 모듈이 아니면 revert.
+  modifier onlySaleModule() {
+    if (!saleModule[msg.sender]) {
+      revert NotSaleModule(msg.sender);
+    }
+    _;
+  }
+
   /// @inheritdoc IDXRegistry
   function isExpired(bytes32 node) public view override returns (bool) {
     bytes32 current = node;
@@ -114,6 +151,16 @@ contract DXRegistry is IDXRegistry {
   ///         zero address면 비활성.
   function setRecordInvalidator(address invalidator) external override authorised(0x0) {
     recordInvalidator = IRecordInvalidator(invalidator);
+  }
+
+  /// @notice Root-owner only. Authorise or revoke a sale module permitted to
+  ///         call `issueSubnodeRecordLocked`. The root node (0x0) owner is the
+  ///         registry admin (no separate Ownable).
+  ///         루트 소유자 전용. `issueSubnodeRecordLocked` 호출이 허용된 판매
+  ///         모듈을 인가/해제한다. 루트 노드(0x0) 소유자가 레지스트리 관리자.
+  function setSaleModule(address module, bool allowed) external override authorised(0x0) {
+    saleModule[module] = allowed;
+    emit SaleModuleSet(module, allowed);
   }
 
   /// @notice Called by the parent node owner (e.g. `DXRegistrar` for `.dex`)
@@ -244,8 +291,13 @@ contract DXRegistry is IDXRegistry {
 
   /// @notice Issue a new direct subnode to `owner` with `resolver`.
   ///         Parent owner only. The child inherits parent expiry dynamically.
+  ///         This is the UNLOCKED path: the parent retains the ability to
+  ///         reassign/revoke. Re-issuing after expiry also clears any stale
+  ///         sale-lock from a previous (expired) sale.
   ///         직접 하위 서브노드를 수령자에게 발급한다. 부모 소유자만 호출.
-  ///         자식은 부모 만료 상태를 동적으로 상속한다.
+  ///         자식은 부모 만료 상태를 동적으로 상속한다. 무잠금 경로 — 부모가
+  ///         재지정/회수 가능. 만료 후 재발급 시 이전 판매의 잔여 판매-잠금도
+  ///         해제한다.
   function issueSubnodeRecord(
     bytes32 node,
     string calldata label,
@@ -258,13 +310,50 @@ contract DXRegistry is IDXRegistry {
     if (records[subnode].owner != address(0)) revert SubnodeExists(subnode);
 
     _setSubnodeRecord(node, subnode, labelHash, _owner, _resolver);
+    // Parent-direct issuance is never sale-locked; clear any stale lock left
+    // over from a previously-expired sale of the same label.
+    //   부모 직접 발급은 판매-잠금이 아니다. 같은 라벨의 이전 만료 판매에서
+    //   남은 잔여 잠금을 해제한다.
+    if (subnodeSaleLocked[subnode]) {
+      subnodeSaleLocked[subnode] = false;
+    }
     _invalidate(subnode);
     emit SubnodeIssued(node, subnode, label, _owner);
   }
 
+  /// @notice Authorised sale module only. Issue a subnode to `owner` AND mark
+  ///         it sale-locked. While the subnode is live (non-expired), the
+  ///         parent cannot reassign or revoke it. The caller (sale module)
+  ///         must additionally be authorised for `node` (the parent must have
+  ///         delegated via `setApprovalForAll`) — enforced by `authorised`.
+  ///         인가된 판매 모듈 전용. 서브노드를 발급하고 판매-잠금을 표시한다.
+  ///         라이브 동안 부모가 재지정/회수 불가. 호출자(판매 모듈)는 추가로
+  ///         `node`에 대해 authorised여야 한다(부모가 `setApprovalForAll`로
+  ///         위임). — `authorised`가 강제.
+  function issueSubnodeRecordLocked(
+    bytes32 node,
+    string calldata label,
+    address _owner,
+    address _resolver
+  ) external override onlySaleModule authorised(node) returns (bytes32 subnode) {
+    if (_owner == address(0)) revert InvalidRecipient();
+    bytes32 labelHash = _validateSubnodeLabel(label);
+    subnode = keccak256(abi.encodePacked(node, labelHash));
+    if (records[subnode].owner != address(0)) revert SubnodeExists(subnode);
+
+    _setSubnodeRecord(node, subnode, labelHash, _owner, _resolver);
+    subnodeSaleLocked[subnode] = true;
+    _invalidate(subnode);
+    emit SubnodeIssuedLocked(node, subnode, label, _owner);
+  }
+
   /// @notice Reassign an existing direct subnode to `owner`.
-  ///         Existing resolver records are invalidated.
-  ///         기존 직접 하위 서브노드 소유자를 재지정한다. 기존 resolver 레코드는 무효화.
+  ///         Existing resolver records are invalidated. A LIVE sale-locked
+  ///         subnode cannot be reassigned (buyer protection); it only becomes
+  ///         reassignable after it expires.
+  ///         기존 직접 하위 서브노드 소유자를 재지정한다. 기존 resolver 레코드는
+  ///         무효화. 라이브 판매-잠금 서브노드는 재지정 불가(구매자 보호) —
+  ///         만료 후에만 재지정 가능.
   function reassignSubnodeRecord(
     bytes32 node,
     string calldata label,
@@ -277,14 +366,26 @@ contract DXRegistry is IDXRegistry {
     address previousOwner = records[subnode].owner;
     if (previousOwner == address(0)) revert SubnodeNotFound(subnode);
 
+    // Buyer protection: a sold (sale-locked) subname cannot be reassigned by
+    // the parent while it is live. It becomes reassignable only after expiry.
+    //   구매자 보호: 판매(판매-잠금)된 서브네임은 라이브 동안 부모가 재지정
+    //   불가. 만료 후에만 재지정 가능.
+    if (subnodeSaleLocked[subnode] && !isExpired(subnode)) {
+      revert SubnodeSaleLocked(subnode);
+    }
+
     _setSubnodeRecord(node, subnode, labelHash, _owner, _resolver);
     _invalidate(subnode);
     emit SubnodeReassigned(node, subnode, label, previousOwner, _owner);
   }
 
   /// @notice Revoke an existing direct subnode back to the parent owner.
-  ///         Existing resolver records are invalidated.
-  ///         기존 직접 하위 서브노드를 부모 소유자에게 회수한다. 기존 resolver 레코드는 무효화.
+  ///         Existing resolver records are invalidated. A LIVE sale-locked
+  ///         subnode cannot be revoked (buyer protection); it only becomes
+  ///         revocable after it expires.
+  ///         기존 직접 하위 서브노드를 부모 소유자에게 회수한다. 기존 resolver
+  ///         레코드는 무효화. 라이브 판매-잠금 서브노드는 회수 불가(구매자
+  ///         보호) — 만료 후에만 회수 가능.
   function revokeSubnodeRecord(
     bytes32 node,
     string calldata label,
@@ -295,8 +396,23 @@ contract DXRegistry is IDXRegistry {
     address previousOwner = records[subnode].owner;
     if (previousOwner == address(0)) revert SubnodeNotFound(subnode);
 
+    // Buyer protection: a sold (sale-locked) subname cannot be revoked by the
+    // parent while it is live. It becomes revocable only after expiry.
+    //   구매자 보호: 판매(판매-잠금)된 서브네임은 라이브 동안 부모가 회수 불가.
+    //   만료 후에만 회수 가능.
+    if (subnodeSaleLocked[subnode] && !isExpired(subnode)) {
+      revert SubnodeSaleLocked(subnode);
+    }
+
     address parentOwner = records[node].owner;
     _setSubnodeRecord(node, subnode, labelHash, parentOwner, _resolver);
+    // The subname has been reclaimed by the parent; it is no longer a buyer's
+    // sale-locked asset. Clear the lock so the parent can manage it freely.
+    //   부모가 회수했으므로 더는 구매자의 판매-잠금 자산이 아니다. 부모가
+    //   자유롭게 관리하도록 잠금 해제.
+    if (subnodeSaleLocked[subnode]) {
+      subnodeSaleLocked[subnode] = false;
+    }
     _invalidate(subnode);
     emit SubnodeRevoked(node, subnode, label, previousOwner, parentOwner);
   }
