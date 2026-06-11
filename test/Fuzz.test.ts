@@ -162,7 +162,7 @@ describe("Fuzz — discount applies correctly across many configurations", funct
     const ONE_YEAR = DURATIONS[0];
 
     let lastPrice: bigint | null = null;
-    for (const bps of [0n, 100n, 500n, 1000n, 2000n, 3000n, 4000n, 5000n]) {
+    for (const bps of [0n, 100n, 500n, 1000n, 2000n, 3000n, 4000n, 5000n, 10000n]) {
       if (bps === 0n) {
         await controller.write.setDiscountToken(
           [ZERO_ADDR, 0n, 0n],

@@ -153,15 +153,10 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   uint256 public requiredHoldAmount;
 
   /// @notice Discount rate in basis points (1000 = 10%). Hard-capped at
-  ///         `MAX_DISCOUNT_BPS` in the setter so a mistaken or compromised
-  ///         setter call can never burn the entire rent.
+  ///         `MAX_DISCOUNT_BPS` in the setter.
   ///         할인율 (만분율, 1000 = 10%). setter에서 `MAX_DISCOUNT_BPS`
-  ///         상한을 강제하여 실수·탈취 시 임대료 전액 손실 방지.
+  ///         상한을 강제.
   uint256 public discountBps;
-
-  /// @notice Hard cap on the discount rate. 5000 bps = 50%.
-  ///         할인율 하드캡. 5000 bps = 50%.
-  uint256 public constant MAX_DISCOUNT_BPS = 5000;
 
   /// @notice Optional contribution-SBT discount. Holders of at least one
   ///         badge from `sbtDiscountToken` receive `sbtDiscountBps` off.
@@ -220,9 +215,9 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   ///         `setDxnReward`로 owner가 변경 가능. 예: $2.00 = `2e18`.
   uint256 public dxnRewardPriceAttoUSD;
 
-  /// @notice Maximum purchase reward rate. 10000 bps = 100%.
-  ///         구매 보상율 상한. 10000 bps = 100%.
-  uint256 public constant MAX_DXN_REWARD_BPS = 10000;
+    /// @notice Hard cap on the discount rate. 10000 bps = 100%.
+  ///         할인율 하드캡. 10000 bps = 100%.
+  uint256 public constant MAX_DISCOUNT_BPS = 10000;
 
   /// @dev commitment hash => timestamp at which it was committed.
   ///      commitment 해시 => commit된 시각.
@@ -300,7 +295,7 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   ///         renewal on both native and ERC-20 payment paths.
   ///
   ///         Constraints enforced by this setter:
-  ///           - `_discountBps` must be ≤ `MAX_DISCOUNT_BPS` (50%).
+  ///           - `_discountBps` must be ≤ `MAX_DISCOUNT_BPS` (100%).
   ///           - When the discount is enabled (`_discountToken != 0`),
   ///             `_requiredHoldAmount` must be > 0. A zero threshold would
   ///             grant the discount to every wallet (since any address has
@@ -313,7 +308,7 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   ///         `_discountBps` 만분율 할인 (네이티브·토큰 결제 모두 적용).
   ///
   ///         setter에서 강제하는 제약:
-  ///           - `_discountBps` ≤ `MAX_DISCOUNT_BPS` (50%).
+  ///           - `_discountBps` ≤ `MAX_DISCOUNT_BPS` (100%).
   ///           - 활성화 시(`_discountToken != 0`) `_requiredHoldAmount` > 0.
   ///             0으로 설정하면 모든 지갑에 할인이 적용되어 사실상 오설정.
   ///
@@ -361,8 +356,8 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     uint256 _rewardBps,
     uint256 _rewardPriceAttoUSD
   ) external onlyOwner {
-    if (_rewardBps > MAX_DXN_REWARD_BPS) {
-      revert RewardRateTooHigh(_rewardBps, MAX_DXN_REWARD_BPS);
+    if (_rewardBps > MAX_DISCOUNT_BPS) {
+      revert RewardRateTooHigh(_rewardBps, MAX_DISCOUNT_BPS);
     }
 
     if (_dxnToken == address(0)) {
@@ -389,7 +384,7 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   {
     uint256 bps = _effectiveDiscountBps(user);
     if (bps == 0) return price;
-    // `bps <= MAX_DISCOUNT_BPS` (50%) is guaranteed because each source is
+    // `bps <= MAX_DISCOUNT_BPS` (100%) is guaranteed because each source is
     // capped in its setter and we take the max (not the sum) below.
     //   각 할인원이 setter에서 상한 강제되고 아래에서 합이 아닌 max를 취하므로
     //   `bps <= MAX_DISCOUNT_BPS` 보장 → 항상 `할인액 <= price`.
@@ -424,9 +419,9 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     return best;
   }
 
-  /// @notice True if `user` currently qualifies for any discount (token or
-  ///         SBT). Useful for UIs that want to render "X% off" badges.
-  ///         `user`가 토큰·SBT 중 하나라도 할인 조건을 충족하는지. UI 배지용.
+  /// @notice True if `user` currently qualifies for any discount. Useful for
+  ///         UIs that want to render "X% off" badges.
+  ///         `user`가 어떤 할인 조건이라도 충족하는지. UI 배지용.
   function isDiscountEligible(address user) external view returns (bool) {
     return _effectiveDiscountBps(user) > 0;
   }
@@ -488,7 +483,7 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   ///         `rentPriceForPayer` to show "your discounted price".
   ///
   ///         특정 라벨에 대한 총 가격(임대료 + post-grace premium)을 네이티브
-  ///         자산 wei로 반환. MOL 할인은 적용되지 않음 — 할인 적용된 가격은
+  ///         자산 wei로 반환. 할인은 적용되지 않음 — 할인 적용된 가격은
   ///         `rentPriceForPayer` 사용. 지갑은 기준 가격으로 이 함수를,
   ///         "할인 적용 가격"으로 `rentPriceForPayer`를 호출할 수 있다.
   /// @param  label    Label to be registered. / 등록할 라벨.
@@ -500,9 +495,8 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     return _attoUSDToWei(_priceWithPremiumAttoUSD(label, duration));
   }
 
-  /// @notice Same as `rentPriceFor`, but applies the MOL holder discount
-  ///         based on `payer`'s current MOL balance.
-  ///         `rentPriceFor`와 동일하되 `payer`의 MOL 잔액 기준 할인을 적용.
+  /// @notice Same as `rentPriceFor`, but applies `payer`'s effective discount.
+  ///         `rentPriceFor`와 동일하되 `payer`의 유효 할인을 적용.
   function rentPriceForPayer(
     string calldata label,
     uint256 duration,
@@ -531,9 +525,9 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   }
 
   /// @notice Same as `rentPriceInToken`, but for a *specific* label so that
-  ///         any post-grace premium is included. Does NOT apply MOL discount.
+  ///         any post-grace premium is included. Does NOT apply discounts.
   ///         `rentPriceInToken`과 동일하되 특정 라벨의 post-grace premium
-  ///         포함. MOL 할인은 적용되지 않음.
+  ///         포함. 할인은 적용되지 않음.
   function rentPriceInTokenFor(
     string calldata label,
     uint256 duration,
@@ -542,9 +536,8 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     return _attoUSDToTokenUnits(_priceWithPremiumAttoUSD(label, duration), token);
   }
 
-  /// @notice Token-denominated price including the MOL holder discount based
-  ///         on `payer`'s MOL balance.
-  ///         `payer`의 MOL 잔액 기준 할인이 적용된 토큰 가격.
+  /// @notice Token-denominated price including `payer`'s effective discount.
+  ///         `payer`의 유효 할인이 적용된 토큰 가격.
   function rentPriceInTokenForPayer(
     string calldata label,
     uint256 duration,
@@ -646,11 +639,11 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     _checkReservation(label, msg.sender);
 
     bytes32 labelhash = keccak256(bytes(label));
-    // Label-specific price including post-grace premium AND the MOL holder
+    // Label-specific price including post-grace premium AND the effective
     // discount (if caller qualifies). Discount is based on `msg.sender`,
-    // not `owner`, because the payer is who actually holds the MOL.
+    // not `owner`, because the payer is who qualifies.
     //
-    // 라벨별 가격 (post-grace premium + MOL 할인 적용). 할인 기준은 결제자인
+    // 라벨별 가격 (post-grace premium + 유효 할인 적용). 할인 기준은 결제자인
     // `msg.sender`이며, `owner`가 아니다.
     uint256 price_ = rentPriceForPayer(label, duration, msg.sender);
 
@@ -677,8 +670,8 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   ) external payable override nonReentrant whenNotPaused {
     bytes32 labelhash = keccak256(bytes(label));
     // Renewal does not trigger premium decay (the name is still owned),
-    // but we still apply the MOL holder discount.
-    //   갱신은 premium decay 대상이 아니지만 MOL 할인은 적용.
+    // but we still apply the effective discount.
+    //   갱신은 premium decay 대상이 아니지만 유효 할인은 적용.
     uint256 price_ = _applyDiscount(rentPrice(duration), msg.sender);
 
     if (msg.value < price_) revert InsufficientFund(price_, msg.value);

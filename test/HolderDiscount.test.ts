@@ -95,20 +95,37 @@ describe("Holder discount", function () {
     );
   });
 
-  it("rejects discount > MAX_DISCOUNT_BPS (50%)", async function () {
+  it("allows 100% discount and rejects above MAX_DISCOUNT_BPS", async function () {
     const { controller, partnerToken, owner } = await deploy();
     await expectRevert(
       controller.write.setDiscountToken(
-        [partnerToken.address, ONE_MILLION_TOKENS, 5001n],
+        [partnerToken.address, ONE_MILLION_TOKENS, 10001n],
         { account: owner.account },
       ),
     );
 
     await controller.write.setDiscountToken(
-      [partnerToken.address, ONE_MILLION_TOKENS, 5000n],
+      [partnerToken.address, ONE_MILLION_TOKENS, 10000n],
       { account: owner.account },
     );
-    expect(await controller.read.discountBps()).to.equal(5000n);
+    expect(await controller.read.discountBps()).to.equal(10000n);
+  });
+
+  it("100% discount makes an eligible holder quote zero", async function () {
+    const { controller, partnerToken, owner, alice } = await deploy();
+
+    await controller.write.setDiscountToken(
+      [partnerToken.address, ONE_MILLION_TOKENS, 10000n],
+      { account: owner.account },
+    );
+    await partnerToken.write.mint([alice.account.address, ONE_MILLION_TOKENS], {
+      account: owner.account,
+    });
+
+    const quote = await controller.read.rentPriceForPayer([
+      "freequote", ONE_YEAR, alice.account.address,
+    ]);
+    expect(quote).to.equal(0n);
   });
 
   it("rejects requiredHoldAmount = 0 when enabling", async function () {

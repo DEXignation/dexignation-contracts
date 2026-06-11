@@ -37,7 +37,7 @@ async function expectRevert(
 
 const ONE_YEAR = 365n * 24n * 60n * 60n;
 const ONE_TOKEN = 10n ** 18n;
-const MAX_DISCOUNT_BPS = 5000n;
+const MAX_DISCOUNT_BPS = 10000n;
 
 describe("SBT-gated discount (A1)", function () {
   async function deploy() {
@@ -123,6 +123,25 @@ describe("SBT-gated discount (A1)", function () {
 
     // 20% off → quote == base * 0.8 (allow exact integer math).
     expect(quote).to.equal(base - (base * 2000n) / 10000n);
+  });
+
+  it("SBT holder can receive a 100% discount", async function () {
+    const { controller, sbt, owner, alice } = await deploy();
+
+    await controller.write.setSBTDiscount([sbt.address, MAX_DISCOUNT_BPS], {
+      account: owner.account,
+    });
+    await sbt.write.award([alice.account.address, "code", "Core contributor"], {
+      account: owner.account,
+    });
+
+    const quote = await controller.read.rentPriceForPayer([
+      "sbtfree",
+      ONE_YEAR,
+      alice.account.address,
+    ]);
+
+    expect(quote).to.equal(0n);
   });
 
   it("token and SBT discounts do not stack (larger wins)", async function () {

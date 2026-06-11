@@ -173,6 +173,7 @@ describe("Invariants — system-wide properties that must always hold", function
       { threshold: 1n, bps: 1n },
       { threshold: 100n * 10n**18n, bps: 1000n },
       { threshold: 1_000_000n * 10n**18n, bps: 5000n },
+      { threshold: 2_000_000n * 10n**18n, bps: 10000n },
     ];
 
     for (const cfg of configs) {
@@ -200,14 +201,14 @@ describe("Invariants — system-wide properties that must always hold", function
     const token = await viem.deployContract("MockERC20", ["T", "T", 18]);
 
     const max = await controller.read.MAX_DISCOUNT_BPS();
-    expect(max).to.equal(5000n);
+    expect(max).to.equal(10000n);
 
     await controller.write.setDiscountToken(
       [token.address, 1n, max],
       { account: owner.account },
     );
 
-    const aboveMax = [max + 1n, 6000n, 9999n, 10000n];
+    const aboveMax = [max + 1n, 10001n, 20000n];
     for (const v of aboveMax) {
       await expectRevert(
         controller.write.setDiscountToken([token.address, 1n, v], {

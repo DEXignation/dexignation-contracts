@@ -37,7 +37,7 @@ async function expectRevert(
 
 const ONE_YEAR = 365n * 24n * 60n * 60n;
 const ONE_TOKEN = 10n ** 18n;
-const MAX_DISCOUNT_BPS = 5000n;
+const MAX_DISCOUNT_BPS = 10000n;
 const ZERO_ADDR = "0x0000000000000000000000000000000000000000" as `0x${string}`;
 const THRESHOLD = 100n * ONE_TOKEN; // must stake >= 100 tokens
 
@@ -132,6 +132,22 @@ describe("Staking discount (A2)", function () {
       "stakeuser", ONE_YEAR, alice.account.address,
     ]);
     expect(quote).to.equal(base - (base * 1500n) / 10000n);
+  });
+
+  it("staker can receive a 100% discount", async function () {
+    const deployed = await deploy();
+    const { controller, owner, alice } = deployed;
+
+    await controller.write.setStakeDiscount(
+      [deployed.staking.address, THRESHOLD, MAX_DISCOUNT_BPS],
+      { account: owner.account },
+    );
+    await stakeFor(deployed, alice, THRESHOLD);
+
+    const quote = await controller.read.rentPriceForPayer([
+      "stakefree", ONE_YEAR, alice.account.address,
+    ]);
+    expect(quote).to.equal(0n);
   });
 
   it("token / SBT / stake discounts do not stack (largest wins)", async function () {
