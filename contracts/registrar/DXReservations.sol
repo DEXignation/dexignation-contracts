@@ -67,6 +67,7 @@ contract DXReservations is Ownable {
     ReservationReason indexed reason,
     address claimableBy
   );
+  event ClaimableByUpdated(bytes32 indexed labelhash, address claimableBy);
   event LabelReleased(bytes32 indexed labelhash, address indexed releasedBy);
   event ReleaserSet(address indexed releaser, bool allowed);
 
@@ -112,6 +113,20 @@ contract DXReservations is Ownable {
       });
       emit LabelReserved(lh, reason, address(0));
     }
+  }
+
+  /// @notice Update the authorised claimant for an existing reservation.
+  ///         예약을 해제하지 않고 기존 예약 라벨의 클레임 자격자를 변경한다.
+  /// @dev    Passing address(0) clears the claimant and blocks all claimants.
+  ///         address(0)을 넘기면 클레임 자격자가 없어져 모두 차단된다.
+  function setClaimableBy(
+    string calldata label,
+    address claimableBy
+  ) external onlyOwner {
+    bytes32 lh = keccak256(bytes(label));
+    if (!reservations[lh].reserved) revert NotReserved(lh);
+    reservations[lh].claimableBy = claimableBy;
+    emit ClaimableByUpdated(lh, claimableBy);
   }
 
   /// @notice Release a previously reserved label. Owner or authorised

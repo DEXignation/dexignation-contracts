@@ -8,10 +8,7 @@
 import { expect } from "chai";
 import { network } from "hardhat";
 
-async function expectRevert(
-  promise: Promise<unknown>,
-  keyword?: string,
-): Promise<void> {
+async function expectRevert(promise: Promise<unknown>, keyword?: string): Promise<void> {
   try {
     await promise;
   } catch (err: unknown) {
@@ -27,7 +24,6 @@ async function expectRevert(
       : "Expected transaction/read to revert",
   );
 }
-
 
 describe("DXReservations", function () {
   async function deploy() {
@@ -45,9 +41,12 @@ describe("DXReservations", function () {
   it("owner can reserve a single label", async function () {
     const { reservations, owner } = await deploy();
     // ReservationReason.Trademark = 1
-    await reservations.write.reserveLabel(["samsung", 1, "0x0000000000000000000000000000000000000000"], {
-      account: owner.account,
-    });
+    await reservations.write.reserveLabel(
+      ["samsung", 1, "0x0000000000000000000000000000000000000000"],
+      {
+        account: owner.account,
+      },
+    );
     expect(await reservations.read.isReserved(["samsung"])).to.equal(true);
     expect(await reservations.read.isReserved(["alice"])).to.equal(false);
   });
@@ -64,10 +63,9 @@ describe("DXReservations", function () {
 
   it("bulk reservation works", async function () {
     const { reservations, owner } = await deploy();
-    await reservations.write.reserveLabels(
-      [["apple", "google", "amazon"], 1],
-      { account: owner.account },
-    );
+    await reservations.write.reserveLabels([["apple", "google", "amazon"], 1], {
+      account: owner.account,
+    });
     expect(await reservations.read.isReserved(["apple"])).to.equal(true);
     expect(await reservations.read.isReserved(["google"])).to.equal(true);
     expect(await reservations.read.isReserved(["amazon"])).to.equal(true);
@@ -119,22 +117,78 @@ describe("DXReservations", function () {
       ["samsung", 1, "0x0000000000000000000000000000000000000000"],
       { account: owner.account },
     );
+    await expectRevert(reservations.write.releaseLabel(["samsung"], { account: alice.account }));
+  });
+
+  it("owner can update claimableBy for an existing reservation", async function () {
+    const { reservations, owner, alice } = await deploy();
+    await reservations.write.reserveLabel(
+      ["samsung", 1, "0x0000000000000000000000000000000000000000"],
+      { account: owner.account },
+    );
+
+    await reservations.write.setClaimableBy(["samsung", alice.account.address], {
+      account: owner.account,
+    });
+
+    expect(await reservations.read.isClaimableBy(["samsung", alice.account.address])).to.equal(
+      true,
+    );
+    expect(await reservations.read.isClaimableBy(["samsung", owner.account.address])).to.equal(
+      false,
+    );
+  });
+
+  it("owner can clear claimableBy back to fully blocked", async function () {
+    const { reservations, owner, alice } = await deploy();
+    await reservations.write.reserveLabel(["samsung", 1, alice.account.address], {
+      account: owner.account,
+    });
+
+    await reservations.write.setClaimableBy(
+      ["samsung", "0x0000000000000000000000000000000000000000"],
+      { account: owner.account },
+    );
+
+    expect(await reservations.read.isClaimableBy(["samsung", alice.account.address])).to.equal(
+      false,
+    );
+  });
+
+  it("non-owner cannot update claimableBy", async function () {
+    const { reservations, owner, alice } = await deploy();
+    await reservations.write.reserveLabel(
+      ["samsung", 1, "0x0000000000000000000000000000000000000000"],
+      { account: owner.account },
+    );
+
     await expectRevert(
-      reservations.write.releaseLabel(["samsung"], { account: alice.account }),
+      reservations.write.setClaimableBy(["samsung", alice.account.address], {
+        account: alice.account,
+      }),
+    );
+  });
+
+  it("cannot update claimableBy for an unreserved label", async function () {
+    const { reservations, owner, alice } = await deploy();
+    await expectRevert(
+      reservations.write.setClaimableBy(["samsung", alice.account.address], {
+        account: owner.account,
+      }),
+      "NotReserved",
     );
   });
 
   it("isClaimableBy returns true only for the recorded claimant", async function () {
     const { reservations, owner, alice } = await deploy();
-    await reservations.write.reserveLabel(
-      ["samsung", 1, alice.account.address],
-      { account: owner.account },
+    await reservations.write.reserveLabel(["samsung", 1, alice.account.address], {
+      account: owner.account,
+    });
+    expect(await reservations.read.isClaimableBy(["samsung", alice.account.address])).to.equal(
+      true,
     );
-    expect(
-      await reservations.read.isClaimableBy(["samsung", alice.account.address]),
-    ).to.equal(true);
-    expect(
-      await reservations.read.isClaimableBy(["samsung", owner.account.address]),
-    ).to.equal(false);
+    expect(await reservations.read.isClaimableBy(["samsung", owner.account.address])).to.equal(
+      false,
+    );
   });
 });
