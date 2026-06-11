@@ -170,16 +170,23 @@ contract DXResolver is Ownable {
 
     // ── Registrar wiring (v2) ──────────────────────────────────────────────
     // The registrar (NFT contract) is allowed to bump a node's record version
-    // on transfer. Set once after deployment via `setRegistrar`.
-    //   registrar(NFT 컨트랙트)만 전송 시 노드의 레코드 버전을 올릴 수 있다.
-    //   배포 후 setRegistrar로 1회 설정한다.
+    // on transfer. Additional invalidators can be granted for modules that
+    // reassign registry-owned names, such as subname issuance.
+    //   registrar(NFT 컨트랙트)는 전송 시 노드의 레코드 버전을 올릴 수 있다.
+    //   서브네임 발급처럼 registry 소유권을 재지정하는 모듈은 별도 invalidator
+    //   권한을 부여받아 기존 레코드를 무효화할 수 있다.
     address public registrar;
+    mapping(address => bool) public recordInvalidators;
 
     event RegistrarSet(address indexed registrar);
+    event RecordInvalidatorSet(address indexed invalidator, bool approved);
     event RecordsInvalidated(bytes32 indexed node, uint64 newVersion);
 
-    modifier onlyRegistrar() {
-        require(msg.sender == registrar, "Only registrar");
+    modifier onlyRecordInvalidator() {
+        require(
+            msg.sender == registrar || recordInvalidators[msg.sender],
+            "Only record invalidator"
+        );
         _;
     }
 
@@ -190,12 +197,22 @@ contract DXResolver is Ownable {
         emit RegistrarSet(_registrar);
     }
 
+    /// @notice Grant/revoke permission to invalidate resolver records.
+    ///         Used by modules that change registry ownership outside the NFT
+    ///         transfer hook, e.g. subname issuance/reassignment.
+    ///         resolver 레코드 무효화 권한 부여/회수. NFT 전송 훅 밖에서
+    ///         registry 소유권을 변경하는 모듈(서브네임 발급 등)에 사용.
+    function setRecordInvalidator(address invalidator, bool approved) external onlyOwner {
+        recordInvalidators[invalidator] = approved;
+        emit RecordInvalidatorSet(invalidator, approved);
+    }
+
     /// @notice Invalidate ALL records for a node by bumping its version.
     ///         Called by the registrar on NFT transfer. Old records remain on
     ///         chain under the previous version (history) but are no longer read.
     ///         노드의 모든 레코드를 버전 증가로 무효화한다. NFT 전송 시 registrar가
     ///         호출. 옛 레코드는 이전 버전 아래 남으나(이력) 더는 조회되지 않는다.
-    function bumpVersion(bytes32 node) external onlyRegistrar {
+    function bumpVersion(bytes32 node) external onlyRecordInvalidator {
         recordVersions[node]++;
         emit RecordsInvalidated(node, recordVersions[node]);
     }

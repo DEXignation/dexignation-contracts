@@ -126,23 +126,23 @@ describe("Transfer safety — edge cases (v2 hardening)", function () {
     const { resolver, alice, carol } = deployed;
     const node = await registerName(deployed, alice, "nobump");
 
-    // carol (not the registrar) tries to grief by bumping alice's version.
+    // carol (not an authorized invalidator) tries to grief by bumping alice's version.
     await expectRevert(
       resolver.write.bumpVersion([node], { account: carol.account }),
-      "Only registrar",
+      "Only record invalidator",
     );
   });
 
-  // ── 3. Even the resolver owner cannot bumpVersion (only registrar can) ─────
+  // ── 3. Even the resolver owner cannot bumpVersion directly ────────────────
 
-  it("not even the contract owner can bumpVersion (registrar-gated)", async function () {
+  it("not even the contract owner can bumpVersion without invalidator auth", async function () {
     const deployed = await deploy();
     const { resolver, owner, alice } = deployed;
     const node = await registerName(deployed, alice, "ownernobump");
 
     await expectRevert(
       resolver.write.bumpVersion([node], { account: owner.account }),
-      "Only registrar",
+      "Only record invalidator",
     );
   });
 

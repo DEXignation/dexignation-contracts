@@ -93,7 +93,6 @@ contracts cooperate around it.
               └────────────────────┘
 
    Extension modules (optional):
-     - DXSubnameRegistrar     : subname sales & gating
      - DXSubscriptionRenewer  : USDT/USDC auto-renewal
      - DXContributionSBT      : contributor badge (SBT)
      - DXNToken / DXNStaking   : native token + staking (for discounts)
@@ -381,7 +380,7 @@ are covered step by step in `02_transfer_safety_v2.md`.
 | **DXPriceOracle** | Converts USD-fixed prices to live POL via Chainlink. Staleness guard. |
 | **DXReverseRegistrar** | Reverse resolution (address → name) registration. |
 | **DXReservations** | Reserved label management (allow a label only for a specific address). |
-| **DXSubnameRegistrar** | Subname sales & access gating. |
+| **DXRegistry subname issuance** | Parent owner directly issues/reassigns/revokes subnames. |
 | **DXSubscriptionRenewer** | USDT/USDC-based auto-renewal (subscription). |
 | **DXContributionSBT** | Contributor badge (Soulbound Token), for discount eligibility. |
 | **DXNToken / DXNStaking** | Native token and staking (for discount eligibility). |
@@ -401,7 +400,7 @@ For detailed variables/functions/behavior of each contract, see `01_contracts.md
 | **DXPriceOracle** | USD 고정가를 Chainlink로 실시간 POL 환산. staleness 가드. |
 | **DXReverseRegistrar** | 역방향 해석(주소 → 이름) 등록. |
 | **DXReservations** | 예약 라벨 관리(특정 라벨을 특정 주소에만 등록 허용). |
-| **DXSubnameRegistrar** | 서브네임 판매·접근 게이팅. |
+| **DXRegistry 서브네임 발급** | 상위 도메인 소유자가 서브네임을 직접 발급·재지정·회수. |
 | **DXSubscriptionRenewer** | USDT/USDC 기반 자동 갱신(구독). |
 | **DXContributionSBT** | 기여자 배지(Soulbound Token), 할인 자격용. |
 | **DXNToken / DXNStaking** | 자체 토큰 및 스테이킹(할인 자격용). |

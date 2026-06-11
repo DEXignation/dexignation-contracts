@@ -121,7 +121,7 @@ User → Controller (register/pay/discount) → Registrar (mint NFT) → Registr
        Controller → PriceOracle (USD→POL, Chainlink)
 ```
 
-Optional modules (deployed separately, core untouched): DXSubnameRegistrar, DXSubscriptionRenewer, RevenueDistributor.
+Optional modules (deployed separately, core untouched): DXSubscriptionRenewer, RevenueDistributor.
 
 ## Tech Stack
 

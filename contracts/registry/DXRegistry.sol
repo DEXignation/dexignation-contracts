@@ -36,6 +36,11 @@
 pragma solidity ^0.8.28;
 
 import {IDXRegistry} from "./IDXRegistry.sol";
+import "../utils/StringUtils.sol";
+
+interface IRecordInvalidator {
+  function bumpVersion(bytes32 node) external;
+}
 
 /// @title  DXRegistry
 /// @notice The central name registry for the DEXignation namespace.
@@ -50,12 +55,19 @@ import {IDXRegistry} from "./IDXRegistry.sol";
 ///         레코드를 저장한다. ENS `ENSRegistry`와 역할이 같지만, 만료
 ///         시각을 레지스트리에서 직접 추적한다.
 contract DXRegistry is IDXRegistry {
+  using StringUtils for string;
 
   /// @dev namehash node => record(owner, resolver, expires)
   mapping(bytes32 => Record) records;
 
+  /// @dev child node => parent node. Used for inherited expiry.
+  mapping(bytes32 => bytes32) public override parentOf;
+
   /// @dev owner => (operator => approved). ERC-721 style approval-for-all.
   mapping(address => mapping(address => bool)) operators;
+
+  /// @notice Optional resolver-like contract that can invalidate stale records.
+  IRecordInvalidator public recordInvalidator;
 
   /// @notice Root node owner is set to the deployer. The deployer should
   ///         transfer ownership of each TLD (e.g. `.dex`) to its registrar
@@ -84,7 +96,24 @@ contract DXRegistry is IDXRegistry {
 
   /// @inheritdoc IDXRegistry
   function isExpired(bytes32 node) public view override returns (bool) {
-    return records[node].expires != 0 && block.timestamp > records[node].expires;
+    bytes32 current = node;
+    for (uint256 i = 0; i < 32; i++) {
+      if (records[current].expires != 0 && block.timestamp > records[current].expires) {
+        return true;
+      }
+      bytes32 parent = parentOf[current];
+      if (parent == bytes32(0)) return false;
+      current = parent;
+    }
+    return true;
+  }
+
+  /// @notice Set the contract called to invalidate resolver records after
+  ///         subnode issue/reassign/revoke operations. Set zero to disable.
+  ///         서브노드 발급/재지정/회수 후 resolver 레코드를 무효화할 컨트랙트.
+  ///         zero address면 비활성.
+  function setRecordInvalidator(address invalidator) external override authorised(0x0) {
+    recordInvalidator = IRecordInvalidator(invalidator);
   }
 
   /// @notice Called by the parent node owner (e.g. `DXRegistrar` for `.dex`)
@@ -133,6 +162,7 @@ contract DXRegistry is IDXRegistry {
     address _owner
   ) public override authorised(node) returns (bytes32) {
     bytes32 subnode = keccak256(abi.encodePacked(node, label));
+    parentOf[subnode] = node;
     _setOwner(subnode, _owner);
     emit NewOwner(node, label, _owner);
     return subnode;
@@ -202,6 +232,7 @@ contract DXRegistry is IDXRegistry {
     address _resolver
   ) external override authorised(node) {
     bytes32 subnode = keccak256(abi.encodePacked(node, label));
+    parentOf[subnode] = node;
     _setOwner(subnode, _owner);
     emit NewOwner(node, label, _owner);
 
@@ -209,6 +240,65 @@ contract DXRegistry is IDXRegistry {
       records[subnode].resolver = _resolver;
       emit NewResolver(subnode, _resolver);
     }
+  }
+
+  /// @notice Issue a new direct subnode to `owner` with `resolver`.
+  ///         Parent owner only. The child inherits parent expiry dynamically.
+  ///         직접 하위 서브노드를 수령자에게 발급한다. 부모 소유자만 호출.
+  ///         자식은 부모 만료 상태를 동적으로 상속한다.
+  function issueSubnodeRecord(
+    bytes32 node,
+    string calldata label,
+    address _owner,
+    address _resolver
+  ) external override authorised(node) returns (bytes32 subnode) {
+    if (_owner == address(0)) revert InvalidRecipient();
+    bytes32 labelHash = _validateSubnodeLabel(label);
+    subnode = keccak256(abi.encodePacked(node, labelHash));
+    if (records[subnode].owner != address(0)) revert SubnodeExists(subnode);
+
+    _setSubnodeRecord(node, subnode, labelHash, _owner, _resolver);
+    _invalidate(subnode);
+    emit SubnodeIssued(node, subnode, label, _owner);
+  }
+
+  /// @notice Reassign an existing direct subnode to `owner`.
+  ///         Existing resolver records are invalidated.
+  ///         기존 직접 하위 서브노드 소유자를 재지정한다. 기존 resolver 레코드는 무효화.
+  function reassignSubnodeRecord(
+    bytes32 node,
+    string calldata label,
+    address _owner,
+    address _resolver
+  ) external override authorised(node) returns (bytes32 subnode) {
+    if (_owner == address(0)) revert InvalidRecipient();
+    bytes32 labelHash = _validateSubnodeLabel(label);
+    subnode = keccak256(abi.encodePacked(node, labelHash));
+    address previousOwner = records[subnode].owner;
+    if (previousOwner == address(0)) revert SubnodeNotFound(subnode);
+
+    _setSubnodeRecord(node, subnode, labelHash, _owner, _resolver);
+    _invalidate(subnode);
+    emit SubnodeReassigned(node, subnode, label, previousOwner, _owner);
+  }
+
+  /// @notice Revoke an existing direct subnode back to the parent owner.
+  ///         Existing resolver records are invalidated.
+  ///         기존 직접 하위 서브노드를 부모 소유자에게 회수한다. 기존 resolver 레코드는 무효화.
+  function revokeSubnodeRecord(
+    bytes32 node,
+    string calldata label,
+    address _resolver
+  ) external override authorised(node) returns (bytes32 subnode) {
+    bytes32 labelHash = _validateSubnodeLabel(label);
+    subnode = keccak256(abi.encodePacked(node, labelHash));
+    address previousOwner = records[subnode].owner;
+    if (previousOwner == address(0)) revert SubnodeNotFound(subnode);
+
+    address parentOwner = records[node].owner;
+    _setSubnodeRecord(node, subnode, labelHash, parentOwner, _resolver);
+    _invalidate(subnode);
+    emit SubnodeRevoked(node, subnode, label, previousOwner, parentOwner);
   }
 
   /// @inheritdoc IDXRegistry
@@ -222,5 +312,36 @@ contract DXRegistry is IDXRegistry {
   ///      내부 소유자 설정 함수 (이벤트/권한 검증 없음 — 호출자가 책임).
   function _setOwner(bytes32 node, address _owner) internal {
     records[node].owner = _owner;
+  }
+
+  function _setSubnodeRecord(
+    bytes32 node,
+    bytes32 subnode,
+    bytes32 label,
+    address _owner,
+    address _resolver
+  ) internal {
+    parentOf[subnode] = node;
+    _setOwner(subnode, _owner);
+    emit NewOwner(node, label, _owner);
+
+    if (_resolver != records[subnode].resolver) {
+      records[subnode].resolver = _resolver;
+      emit NewResolver(subnode, _resolver);
+    }
+  }
+
+  function _validateSubnodeLabel(string calldata label) internal pure returns (bytes32) {
+    if (!(label.strlen() >= 3 && label.isValidUnicodeLabel())) {
+      revert InvalidLabel(label);
+    }
+    return keccak256(bytes(label));
+  }
+
+  function _invalidate(bytes32 node) internal {
+    address invalidator = address(recordInvalidator);
+    if (invalidator != address(0)) {
+      recordInvalidator.bumpVersion(node);
+    }
   }
 }

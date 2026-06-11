@@ -63,6 +63,35 @@ interface IDXRegistry {
   ///      operator가 승인 또는 해제될 때.
   event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
 
+  /// @dev Emitted when a parent owner issues a subnode to a recipient.
+  ///      부모 노드 소유자가 서브노드를 수령자에게 발급할 때.
+  event SubnodeIssued(
+    bytes32 indexed node,
+    bytes32 indexed subnode,
+    string label,
+    address indexed recipient
+  );
+
+  /// @dev Emitted when a parent owner reassigns an existing subnode.
+  ///      부모 노드 소유자가 기존 서브노드 소유자를 재지정할 때.
+  event SubnodeReassigned(
+    bytes32 indexed node,
+    bytes32 indexed subnode,
+    string label,
+    address previousOwner,
+    address indexed recipient
+  );
+
+  /// @dev Emitted when a parent owner revokes a subnode back to itself.
+  ///      부모 노드 소유자가 서브노드를 자신에게 회수할 때.
+  event SubnodeRevoked(
+    bytes32 indexed node,
+    bytes32 indexed subnode,
+    string label,
+    address previousOwner,
+    address indexed revokedTo
+  );
+
   // ── Errors ────────────────────────────────────────────────────────────────
 
   /// @dev Caller is not authorised to mutate the node.
@@ -73,6 +102,22 @@ interface IDXRegistry {
   ///      노드가 만료되었음.
   error NameExpired();
 
+  /// @dev Subnode label is empty or invalid under the launch label policy.
+  ///      서브노드 라벨이 비었거나 현재 라벨 정책상 유효하지 않음.
+  error InvalidLabel(string label);
+
+  /// @dev Recipient cannot be zero.
+  ///      수령자는 zero address일 수 없음.
+  error InvalidRecipient();
+
+  /// @dev Subnode already exists.
+  ///      서브노드가 이미 존재함.
+  error SubnodeExists(bytes32 subnode);
+
+  /// @dev Subnode does not exist.
+  ///      서브노드가 존재하지 않음.
+  error SubnodeNotFound(bytes32 subnode);
+
   // ── Functions ─────────────────────────────────────────────────────────────
 
   function setOwner(bytes32 node, address owner) external;
@@ -80,6 +125,10 @@ interface IDXRegistry {
   function owner(bytes32 node) external view returns (address);
 
   function isExpired(bytes32 node) external view returns (bool);
+
+  function parentOf(bytes32 node) external view returns (bytes32);
+
+  function setRecordInvalidator(address invalidator) external;
 
   function setSubnodeOwner(
     bytes32 node,
@@ -120,6 +169,26 @@ interface IDXRegistry {
     address owner,
     address resolver
   ) external;
+
+  function issueSubnodeRecord(
+    bytes32 node,
+    string calldata label,
+    address owner,
+    address resolver
+  ) external returns (bytes32);
+
+  function reassignSubnodeRecord(
+    bytes32 node,
+    string calldata label,
+    address owner,
+    address resolver
+  ) external returns (bytes32);
+
+  function revokeSubnodeRecord(
+    bytes32 node,
+    string calldata label,
+    address resolver
+  ) external returns (bytes32);
 
   function recordExists(bytes32 node) external view returns (bool);
 }

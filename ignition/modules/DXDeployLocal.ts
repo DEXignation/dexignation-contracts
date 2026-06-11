@@ -44,8 +44,6 @@ const REVENUE_DISTRIBUTOR_BUFFER_BPS = 1000;
 const STAKE_DISCOUNT_THRESHOLD = 100n * 10n ** 18n;
 const STAKE_DISCOUNT_BPS = 250n;
 
-const SUBNAME_PROTOCOL_FEE_BPS = 250n;
-
 export default buildModule("DXDeployLocal", (m) => {
   // ── Mocks ─────────────────────────────────────────────────────────────────
   const mockUsdc = m.contract("MockERC20", ["Mock USDC", "tUSDC", 6], { 
@@ -72,12 +70,6 @@ export default buildModule("DXDeployLocal", (m) => {
   // ── Optional add-ons ──────────────────────────────────────────────────────
   const reservations = m.contract("DXReservations", []);
   const contributionSBT = m.contract("DXContributionSBT", []);
-  const subnameRegistrar = m.contract("DXSubnameRegistrar", [
-    registry,
-    resolver,
-    m.getAccount(0),
-    SUBNAME_PROTOCOL_FEE_BPS,
-  ]);
   const dxnToken = m.contract("DXNToken", ["DEXignation Token", "DXN", DXN_CAP]);
   const dxnStaking = m.contract("DXNStaking", [dxnToken]);
   const revenueDistributor = m.contract(
@@ -144,6 +136,12 @@ export default buildModule("DXDeployLocal", (m) => {
     after: [grantTld],
   });
   m.call(resolver, "setRegistrar", [registrar], { id: "SetResolverRegistrar" });
+  m.call(registry, "setRecordInvalidator", [resolver], {
+    id: "SetRegistryRecordInvalidator",
+  });
+  m.call(resolver, "setRecordInvalidator", [registry, true], {
+    id: "AllowRegistryRecordInvalidator",
+  });
 
   // ── Mint mock tokens ──────────────────────────────────────────────────────
   // USDC/USDT use 6 decimals; DISCOUNT uses 18.
@@ -169,7 +167,6 @@ export default buildModule("DXDeployLocal", (m) => {
     controller,
     reservations,
     contributionSBT,
-    subnameRegistrar,
     dxnToken,
     dxnStaking,
     revenueDistributor,

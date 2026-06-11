@@ -11,7 +11,7 @@
 //   판매자가 스테이블코인 고정가로 리스팅하고, 그 가격을 낸 구매자는 같은
 //   트랜잭션에서 도메인을 받는다. 경매 없음, 오라클 없음.
 //
-//   DESIGN — "Pattern 1" (operator delegation), mirroring DXSubnameRegistrar:
+//   DESIGN — "Pattern 1" (operator delegation):
 //     • This contract touches NO existing contract storage. It calls the
 //       DXRegistrar (an ERC-721) only through its public interface.
 //     • To sell, the seller approves THIS marketplace for the single token:

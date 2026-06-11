@@ -613,16 +613,17 @@ Reference test: `DXReservations`.
 
 ## 8. Extension modules
 
-### 8.1 DXSubnameRegistrar — subname commerce
+### 8.1 DXRegistry — direct subname issuance
 
-Lets a parent name owner **sell** child names (e.g. `shop.roy.dex`).
+Lets a parent name owner directly issue child names (e.g. `shop.roy.dex`) to
+specific wallet addresses.
 
-- price setting, sales enable/disable
-- revenue split (protocol fee + parent owner share), `MAX_FEE_BPS` cap
-- access gating: restrict purchase to ERC-20/SBT holders
-- requires module delegation (parent delegates authority to the module)
+- no sale/payment flow
+- parent owner can issue, reassign, and revoke direct child nodes
+- child nodes dynamically inherit parent expiry
+- resolver records are invalidated on reassign/revoke
 
-Reference tests: `Subname-Commerce`, `Subname-Gating`.
+Reference tests: `Subname-Issuance`.
 
 ### 8.2 DXSubscriptionRenewer — auto-renewal (subscription)
 
@@ -656,8 +657,9 @@ Distributes revenue at fixed ratios.
 
 <details><summary>▶ 한국어로 보기</summary>
 
-- **DXSubnameRegistrar**: 부모 소유자가 하위 이름 판매. 가격 설정·수익 분배(MAX_FEE_BPS
-  상한)·접근 게이팅(ERC-20/SBT). 모듈 위임 필요.
+- **DXRegistry 서브네임 발급**: 부모 소유자가 하위 이름을 특정 지갑에 직접 발급.
+  판매/결제 개념은 없으며, 재지정·회수 시 resolver 레코드는 무효화된다.
+  하위 이름은 부모 이름의 만료 상태를 동적으로 상속한다.
 - **DXSubscriptionRenewer**: USDT/USDC 자동 갱신. 윈도우 내 누구나 `executeRenewal`,
   상한 초과 시 revert. USDT 비표준 approve는 `forceApprove`로 대응.
 - **할인 자격 컨트랙트**: DXContributionSBT(SBT 할인), DXNToken(토큰 할인),
@@ -683,7 +685,7 @@ DXRegistrarController → DXPriceOracle (price)
                       → DXReservations (reservation)
                       → discount contracts (eligibility)
 DXReverseRegistrar → DXRegistry (reverse node)
-DXSubnameRegistrar → DXRegistry (subnode creation)
+DXRegistry → DXResolver (subnode record invalidation)
 DXSubscriptionRenewer → DXRegistrarController (renewal call)
 ```
 

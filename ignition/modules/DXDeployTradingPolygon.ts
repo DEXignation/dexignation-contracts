@@ -6,7 +6,6 @@
 //     • DXMarketplace         (fixed-price P2P)
 //     • DXEnglishAuction      (timed ascending, escrow + anti-snipe)
 //     • DXDutchAuction        (step descending price)
-//     • DXSubnameRegistrar    (subname commerce)
 //     • DXSubscriptionRenewer (auto-renewal)
 //
 //   CRITICAL DIFFERENCE vs DXDeployTrading.ts:
@@ -31,14 +30,13 @@ const MIN_INCREMENT_BPS = 500n;  // English: a new bid must beat top by +5%
 const EXTEND_WINDOW = 600n;      // English anti-snipe: bids within 10 min …
 const EXTEND_BY = 600n;          //   … push the deadline +10 min
 
-// ── Subname / subscription config ─────────────────────────────────────────
-const SUBNAME_FEE_BPS = 250n;    // 2.5% protocol fee on subname sales
+// ── Subscription config ───────────────────────────────────────────────────
 const RENEWAL_WINDOW = 30n * 24n * 60n * 60n; // 30 days before expiry
 
 export default buildModule("DXDeployTradingPolygon", (m) => {
   // Reuse the REAL core already deployed on Polygon mainnet.
   //   메인넷에 이미 배포된 실제 코어 재사용 (재배포하지 않음).
-  const { registrar, registry, resolver, controller } =
+  const { registrar, controller } =
     m.useModule(DXDeployPolygon);
 
   // Treasury / fee recipient. NOTE: defaults to deployer account(0).
@@ -53,10 +51,7 @@ export default buildModule("DXDeployTradingPolygon", (m) => {
   ]);
   const dutch = m.contract("DXDutchAuction", [registrar, feeRecipient, FEE_BPS]);
 
-  // ── Deploy commerce modules ────────────────────────────────────────────
-  const subnameRegistrar = m.contract("DXSubnameRegistrar", [
-    registry, resolver, feeRecipient, SUBNAME_FEE_BPS,
-  ]);
+  // ── Deploy subscription module ─────────────────────────────────────────
   const subscriptionRenewer = m.contract("DXSubscriptionRenewer", [
     controller, registrar, RENEWAL_WINDOW,
   ]);
@@ -78,20 +73,10 @@ export default buildModule("DXDeployTradingPolygon", (m) => {
   m.call(dutch, "setPayToken", [POLYGON_USDC, true], { id: "DutchAllowUSDC" });
   m.call(dutch, "setPayToken", [POLYGON_USDT, true], { id: "DutchAllowUSDT" });
 
-  // NOTE on subname wiring: DXSubnameRegistrar uses "Pattern 1" operator
-  // delegation. Each PARENT-NAME OWNER must individually call
-  //   registry.setApprovalForAll(subnameRegistrar, true)
-  // to let the module issue subnodes under their name. This is per-user and
-  // intentionally NOT done at deploy time.
-  //   서브네임은 패턴1 위임. 각 부모 이름 소유자가 직접
-  //   registry.setApprovalForAll(subnameRegistrar, true)를 호출해야 하며,
-  //   사용자별 작업이라 배포 시점에 하지 않는다.
-
   return {
     marketplace,
     english,
     dutch,
-    subnameRegistrar,
     subscriptionRenewer,
   };
 });
