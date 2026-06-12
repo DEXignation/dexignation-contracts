@@ -34,6 +34,7 @@ const EXTEND_BY = 600n;           // +10 min
 const AUCTION_DUR = 3600n;        // 1 hour
 const RESERVE = 100n * 10n ** 6n; // 100 USDC
 const MINT = 10_000n * 10n ** 6n;
+const GRACE_PERIOD = 70n * 24n * 60n * 60n;
 
 function labelHash(l: string): `0x${string}` { return keccak256(toBytes(l)); }
 function tokenIdOf(l: string): bigint { return BigInt(labelHash(l)); }
@@ -303,9 +304,52 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
     expect(await auction.read.isOnAuction([tokenId])).to.equal(false);
   });
 
+  it("settle ends gracefully and refunds the winner if ownerOf reverts after burn", async function () {
+    const d = await deploy();
+    const { auction, registrar, mockUsdc, alice, bob, dave, testClient } = d;
+    const tokenId = await startAuction(d, alice, "royburn");
+    await fund(d, bob);
+    await auction.write.bid([tokenId, RESERVE], { account: bob.account });
+
+    // Jump past expiry + grace, then burn the expired token. From this point
+    // ERC-721 ownerOf(tokenId) reverts, so settle must use its refund path.
+    //   만료+유예 이후 토큰을 burn하면 ownerOf(tokenId)가 revert한다.
+    //   settle은 이 경우에도 낙찰자 환불 경로로 정상 종료해야 한다.
+    await testClient.increaseTime({ seconds: Number(ONE_YEAR + GRACE_PERIOD + 60n) });
+    await testClient.mine({ blocks: 1 });
+    await registrar.write.burn([tokenId], { account: dave.account });
+
+    await auction.write.settle([tokenId], { account: dave.account });
+
+    expect(await auction.read.pendingReturns([mockUsdc.address, bob.account.address])).to.equal(RESERVE);
+    const before = await mockUsdc.read.balanceOf([bob.account.address]);
+    await auction.write.withdraw([mockUsdc.address], { account: bob.account });
+    expect((await mockUsdc.read.balanceOf([bob.account.address])) - before).to.equal(RESERVE);
+    expect(await auction.read.isOnAuction([tokenId])).to.equal(false);
+  });
+
   it("owner cannot set a fee above MAX_FEE_BPS", async function () {
     const d = await deploy();
     await expectRevert(
       d.auction.write.setProtocolFee([MAX_FEE_BPS + 1n], { account: d.owner.account }), "FeeTooHigh");
+  });
+
+  it("rejects zero minIncrementBps in constructor and setter", async function () {
+    const d = await deploy();
+
+    await expectRevert(
+      d.viem.deployContract("DXEnglishAuction", [
+        d.registrar.address, d.owner.account.address, FEE_BPS,
+        0n, EXTEND_WINDOW, EXTEND_BY,
+      ]),
+      "ZeroMinIncrement",
+    );
+
+    await expectRevert(
+      d.auction.write.setAuctionParams([0n, EXTEND_WINDOW, EXTEND_BY], {
+        account: d.owner.account,
+      }),
+      "ZeroMinIncrement",
+    );
   });
 });

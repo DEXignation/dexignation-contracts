@@ -142,6 +142,7 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
   error NothingToWithdraw();
   error FeeTooHigh(uint256 requested, uint256 max);
   error BadDuration();
+  error ZeroMinIncrement();
 
   constructor(
     address _registrar,
@@ -153,6 +154,7 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
   ) Ownable(msg.sender) {
     if (_registrar == address(0)) revert ZeroAddress();
     if (_protocolFeeBps > MAX_FEE_BPS) revert FeeTooHigh(_protocolFeeBps, MAX_FEE_BPS);
+    if (_minIncrementBps == 0) revert ZeroMinIncrement();
     registrar = IDXRegistrarAuction(_registrar);
     feeRecipient = _feeRecipient;
     protocolFeeBps = _protocolFeeBps;
@@ -177,6 +179,7 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
   function setAuctionParams(uint256 _minIncrementBps, uint256 _extendWindow, uint256 _extendBy)
     external onlyOwner
   {
+    if (_minIncrementBps == 0) revert ZeroMinIncrement();
     minIncrementBps = _minIncrementBps;
     extendWindow = _extendWindow;
     extendBy = _extendBy;
@@ -297,7 +300,13 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
     //   않으면 revert하면 안 된다 — revert는 아래 환불 적립을 롤백해 낙찰자의
     //   에스크로 자금을 가둔다. 대신 경매를 정상 종료: 낙찰자에게 Pull 환불
     //   적립(본인이 withdraw)하고 이전은 생략한다.
-    if (registrar.ownerOf(tokenId) != a.seller) {
+    try registrar.ownerOf(tokenId) returns (address currentOwner) {
+      if (currentOwner != a.seller) {
+        pendingReturns[a.payToken][a.highestBidder] += a.highestBid;
+        emit AuctionSettledNoTransfer(tokenId, a.highestBidder, a.highestBid);
+        return;
+      }
+    } catch {
       pendingReturns[a.payToken][a.highestBidder] += a.highestBid;
       emit AuctionSettledNoTransfer(tokenId, a.highestBidder, a.highestBid);
       return;
