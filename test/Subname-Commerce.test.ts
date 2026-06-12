@@ -7,7 +7,8 @@
 //     live, the parent cannot reassign or revoke it (buyer protection).
 //   • A subname the parent issues DIRECTLY (issueSubnodeRecord) is NOT locked
 //     and remains freely reassignable/revocable (unchanged behaviour).
-//   • After a sold subname expires, the parent may reclaim / re-issue it.
+//   • Sold subnames have no separate configured duration. They inherit parent
+//     expiry dynamically through the registry's parent chain.
 //   • Only an authorised sale module may call issueSubnodeRecordLocked.
 //   • The parent must delegate (setApprovalForAll) before the module can sell.
 
@@ -95,10 +96,9 @@ describe("DXSubnameRegistrar — sale-lock commerce", function () {
     parentNode: `0x${string}`,
     parent: any,
     price: bigint,
-    duration: bigint,
   ) {
     await d.subnameRegistrar.write.configureSubname(
-      [parentNode, price, duration, true],
+      [parentNode, price, true],
       { account: parent.account },
     );
     await d.registry.write.setApprovalForAll(
@@ -111,7 +111,7 @@ describe("DXSubnameRegistrar — sale-lock commerce", function () {
     const d = await deploy();
     const parentNode = await registerParent(d, d.alice, "alicesell");
     const price = 10n ** 18n; // 1 POL
-    await enableSalesAndDelegate(d, parentNode, d.alice, price, ONE_YEAR);
+    await enableSalesAndDelegate(d, parentNode, d.alice, price);
 
     await d.subnameRegistrar.write.registerSubname([parentNode, "team"], {
       account: d.bob.account,
@@ -129,7 +129,7 @@ describe("DXSubnameRegistrar — sale-lock commerce", function () {
     const d = await deploy();
     const parentNode = await registerParent(d, d.alice, "alicerevokelock");
     const price = 10n ** 18n;
-    await enableSalesAndDelegate(d, parentNode, d.alice, price, ONE_YEAR);
+    await enableSalesAndDelegate(d, parentNode, d.alice, price);
 
     await d.subnameRegistrar.write.registerSubname([parentNode, "team"], {
       account: d.bob.account,
@@ -155,7 +155,7 @@ describe("DXSubnameRegistrar — sale-lock commerce", function () {
     const d = await deploy();
     const parentNode = await registerParent(d, d.alice, "alicereassignlock");
     const price = 10n ** 18n;
-    await enableSalesAndDelegate(d, parentNode, d.alice, price, ONE_YEAR);
+    await enableSalesAndDelegate(d, parentNode, d.alice, price);
 
     await d.subnameRegistrar.write.registerSubname([parentNode, "team"], {
       account: d.bob.account,
@@ -172,12 +172,11 @@ describe("DXSubnameRegistrar — sale-lock commerce", function () {
     );
   });
 
-  it("allows reclaim AFTER the sold subname expires", async function () {
+  it("marks a sold subname expired when the parent name expires", async function () {
     const d = await deploy();
     const parentNode = await registerParent(d, d.alice, "aliceexpiry");
     const price = 10n ** 18n;
-    const SHORT = 60n * 60n * 24n * 30n; // 30 days subname duration
-    await enableSalesAndDelegate(d, parentNode, d.alice, price, SHORT);
+    await enableSalesAndDelegate(d, parentNode, d.alice, price);
 
     await d.subnameRegistrar.write.registerSubname([parentNode, "team"], {
       account: d.bob.account,
@@ -194,20 +193,19 @@ describe("DXSubnameRegistrar — sale-lock commerce", function () {
       "SubnodeSaleLocked",
     );
 
-    // Advance past the subname's own expiry (but parent still valid).
-    await d.testClient.increaseTime({ seconds: Number(SHORT) + 5 });
+    // Advance past the parent expiry. Sold subnames inherit parent expiry.
+    await d.testClient.increaseTime({ seconds: Number(ONE_YEAR) + 5 });
     await d.testClient.mine({ blocks: 1 });
+    expect(await d.registry.read.isExpired([parentNode])).to.equal(true);
     expect(await d.registry.read.isExpired([subnode])).to.equal(true);
 
-    // Now the parent CAN revoke it back.
-    await d.registry.write.revokeSubnodeRecord(
-      [parentNode, "team", d.resolver.address],
-      { account: d.alice.account },
+    // The expired parent node itself cannot authorize mutations.
+    await expectRevert(
+      d.registry.write.revokeSubnodeRecord(
+        [parentNode, "team", d.resolver.address],
+        { account: d.alice.account },
+      ),
     );
-    expect((await d.registry.read.owner([subnode])).toLowerCase())
-      .to.equal(d.alice.account.address.toLowerCase());
-    // Lock cleared after reclaim.
-    expect(await d.registry.read.subnodeSaleLocked([subnode])).to.equal(false);
   });
 
   it("does NOT lock a parent-DIRECT issuance (still reassignable/revocable)", async function () {
@@ -271,7 +269,7 @@ describe("DXSubnameRegistrar — sale-lock commerce", function () {
     const price = 10n ** 18n;
     // Configure sales but DO NOT setApprovalForAll.
     await d.subnameRegistrar.write.configureSubname(
-      [parentNode, price, ONE_YEAR, true],
+      [parentNode, price, true],
       { account: d.alice.account },
     );
 
@@ -288,7 +286,7 @@ describe("DXSubnameRegistrar — sale-lock commerce", function () {
     const d = await deploy();
     const parentNode = await registerParent(d, d.alice, "alicedup");
     const price = 10n ** 18n;
-    await enableSalesAndDelegate(d, parentNode, d.alice, price, ONE_YEAR);
+    await enableSalesAndDelegate(d, parentNode, d.alice, price);
 
     await d.subnameRegistrar.write.registerSubname([parentNode, "team"], {
       account: d.bob.account,

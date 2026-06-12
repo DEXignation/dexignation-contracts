@@ -13,9 +13,10 @@ pragma solidity 0.8.28;
 //       registry through its public interface only.
 //     • Issuance goes through the registry's `issueSubnodeRecordLocked`, which
 //       both creates the subnode AND marks it sale-locked. A sale-locked
-//       subname cannot be reassigned or revoked by the parent while it is live
-//       — a sold subname stays the buyer's until it expires. (Buyer protection
-//       is enforced in the registry, not here.)
+//       subname cannot be reassigned or revoked by the parent while it is live.
+//       Sold subnames do not have a separate configured duration here; their
+//       live/expired state follows the registry's parent-expiry chain. (Buyer
+//       protection is enforced in the registry, not here.)
 //     • Two authorisations are required for issuance, giving defence in depth:
 //         (1) the registry must have authorised THIS module as a sale module
 //             (registry.setSaleModule(address(this), true), root-owner only);
@@ -39,7 +40,8 @@ pragma solidity 0.8.28;
 //   설정하고, 구매자가 서브네임을 등록하면 수익을 얻는다. 발급은 registry의
 //   `issueSubnodeRecordLocked`를 거치며, 이는 서브노드 생성과 동시에 판매-잠금을
 //   표시한다 — 판 서브네임은 라이브 동안 부모가 재지정/회수 불가(구매자 보호는
-//   registry가 강제). 발급에는 두 인가가 필요하다: (1) registry가 이 모듈을 판매
+//   registry가 강제). 별도 기간은 저장하지 않고 registry의 부모 만료 체인을 따른다.
+//   발급에는 두 인가가 필요하다: (1) registry가 이 모듈을 판매
 //   모듈로 인가(setSaleModule, 루트 소유자), (2) 부모가 이 모듈에 위임
 //   (setApprovalForAll). 라벨 정책·중복 검증은 registry가 일원 처리하므로 이
 //   모듈은 재검증하지 않는다.
@@ -73,8 +75,6 @@ interface IDXRegistryMinimal {
         address _owner,
         address _resolver
     ) external returns (bytes32);
-
-    function setSubnodeExpires(bytes32 node, bytes32 label, uint256 _expires) external;
 }
 
 /// @dev Minimal balance interface shared by ERC-20 and ERC-721/SBT. Both expose
@@ -132,10 +132,6 @@ contract DXSubnameRegistrar is Ownable, ReentrancyGuard {
     ///         부모 노드의 서브네임 판매 활성화 여부.
     mapping(bytes32 parentNode => bool) public salesEnabled;
 
-    /// @notice Duration (seconds) granted to a purchased subname.
-    ///         구매된 서브네임에 부여되는 기간(초).
-    mapping(bytes32 parentNode => uint256) public subnameDuration;
-
     /// @notice Optional access gate per parent: buyers must hold at least
     ///         `gateThreshold` of `gateToken` to register a subname. Works for
     ///         both ERC-20 (amount) and ERC-721/SBT (badge count). zero address
@@ -160,7 +156,6 @@ contract DXSubnameRegistrar is Ownable, ReentrancyGuard {
     event SubnameConfigured(
         bytes32 indexed parentNode,
         uint256 price,
-        uint256 duration,
         bool enabled
     );
     event SubnameGateConfigured(
@@ -234,8 +229,8 @@ contract DXSubnameRegistrar is Ownable, ReentrancyGuard {
 
     // ──────────────────────────────────────────────────────────────────────────
     // Parent-owner commerce configuration / 부모 소유자 커머스 설정
-    //   The parent owner sets their own price/duration and toggles sales.
-    //   부모 소유자가 자기 가격·기간을 정하고 판매를 토글.
+    //   The parent owner sets their own price and toggles sales.
+    //   부모 소유자가 자기 가격을 정하고 판매를 토글.
     // ──────────────────────────────────────────────────────────────────────────
 
     /// @notice Configure (or update) the subname business for `parentNode`.
@@ -245,19 +240,16 @@ contract DXSubnameRegistrar is Ownable, ReentrancyGuard {
     ///         만료된 노드는 불가.
     /// @param parentNode The parent name node (e.g. namehash of alice.dex).
     /// @param price      Native-wei price charged per subname.
-    /// @param duration   Lifetime (seconds) granted to each subname.
     /// @param enabled    Whether sales are active.
     function configureSubname(
         bytes32 parentNode,
         uint256 price,
-        uint256 duration,
         bool enabled
     ) external {
         _requireParentOwner(parentNode);
         subnamePrice[parentNode] = price;
-        subnameDuration[parentNode] = duration;
         salesEnabled[parentNode] = enabled;
-        emit SubnameConfigured(parentNode, price, duration, enabled);
+        emit SubnameConfigured(parentNode, price, enabled);
     }
 
     /// @notice Set (or clear) the access gate for `parentNode`. Buyers must hold
@@ -288,10 +280,12 @@ contract DXSubnameRegistrar is Ownable, ReentrancyGuard {
     /// @notice Buy a subname under `parentNode`. Pays the parent owner's set
     ///         price; a protocol fee is split to `feeRecipient` and the rest
     ///         goes to the parent owner. The subname is issued (sale-locked) to
-    ///         `msg.sender` through the registry.
+    ///         `msg.sender` through the registry. It has no separate duration;
+    ///         expiry follows the parent chain recorded in the registry.
     ///         `parentNode` 아래 서브네임 구매. 부모 소유자가 정한 가격 지불,
     ///         프로토콜 수수료는 `feeRecipient`로, 나머지는 부모 소유자에게.
     ///         서브네임은 registry를 통해 판매-잠금으로 `msg.sender`에게 발급.
+    ///         별도 기간은 없고 registry의 부모 만료 체인을 따른다.
     /// @param parentNode The parent name node.
     /// @param label      The subname label (e.g. "team" for team.alice.dex).
     function registerSubname(
@@ -360,16 +354,6 @@ contract DXSubnameRegistrar is Ownable, ReentrancyGuard {
             msg.sender,
             defaultResolver
         );
-
-        // Set the subname's expiry if a duration is configured. The labelHash
-        // matches the registry's internal keccak256(bytes(label)).
-        //   기간이 설정돼 있으면 서브네임 만료 설정. labelHash는 registry 내부의
-        //   keccak256(bytes(label))와 동일.
-        uint256 duration = subnameDuration[parentNode];
-        if (duration > 0) {
-            bytes32 labelHash = keccak256(bytes(label));
-            registry.setSubnodeExpires(parentNode, labelHash, block.timestamp + duration);
-        }
 
         // Payouts.
         if (protocolFee > 0) {
