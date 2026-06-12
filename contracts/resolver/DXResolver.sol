@@ -342,6 +342,9 @@ contract DXResolver is Ownable {
 
     /// @notice Get coin address (v1.0 호환성)
     function addr(bytes32 node, uint256 coinType) external view returns (bytes memory) {
+        if (registry.isExpired(node)) {
+            return "";
+        }
         return addresses[node][_ver(node)][coinType];
     }
 
@@ -568,6 +571,10 @@ contract DXResolver is Ownable {
         uint256 chainId,
         uint256 contentTypes
     ) external view returns (uint256, bytes memory) {
+        if (registry.isExpired(node)) {
+            return (0, "");
+        }
+
         // EIP-205: contentTypes is a bitmask; only JSON (4) is stored
         if ((contentTypes & 4) == 0) {
             return (0, "");
