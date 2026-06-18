@@ -236,6 +236,23 @@ describe("DXMarketplace — fixed-price P2P sales of .dex 2LD", function () {
     await expectMetadataUpdate(deployed, cancelHash, tokenId);
   });
 
+  it("keeps listing working if registrar metadata notification wiring is cleared", async function () {
+    const deployed = await deploy();
+    const { marketplace, registrar, mockUsdc, alice, owner } = deployed;
+    const tokenId = await registerName(deployed, alice, "best-effort-list");
+
+    await registrar.write.approve([marketplace.address, tokenId], {
+      account: alice.account,
+    });
+    await registrar.write.setMarketplace([ZERO_ADDR], { account: owner.account });
+
+    await marketplace.write.list([tokenId, mockUsdc.address, PRICE], {
+      account: alice.account,
+    });
+
+    expect(await marketplace.read.isListed([tokenId])).to.equal(true);
+  });
+
   it("an unlisted domain shows NO mark (control)", async function () {
     const deployed = await deploy();
     const tokenId = await registerName(deployed, deployed.alice, "plain");

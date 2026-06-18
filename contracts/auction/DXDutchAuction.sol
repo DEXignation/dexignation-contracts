@@ -53,6 +53,9 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 interface IDXRegistrarDutch is IERC721 {
   function nameExpires(uint256 id) external view returns (uint256);
+}
+
+interface IMetadataUpdateNotifier {
   function notifyMetadataUpdate(uint256 id) external;
 }
 
@@ -327,6 +330,11 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
   }
 
   function _notifyMetadataUpdate(uint256 tokenId) internal {
-    registrar.notifyMetadataUpdate(tokenId);
+    try IMetadataUpdateNotifier(address(registrar)).notifyMetadataUpdate(tokenId) {
+    } catch {
+      // ERC-4906 notifications are best-effort cache invalidation signals.
+      // If registrar wiring changes, auction trading must keep working.
+      return;
+    }
   }
 }

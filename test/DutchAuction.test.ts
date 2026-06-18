@@ -141,7 +141,6 @@ describe("DXDutchAuction — step declining-price auction", function () {
     const tokenId = await registerName(d, alice, "dutch4906");
 
     expect(await registrar.read.supportsInterface([ERC4906_INTERFACE_ID])).to.equal(true);
-
     await registrar.write.approve([auction.address, tokenId], { account: alice.account });
     const createHash = await auction.write.createAuction(
       [tokenId, mockUsdc.address, START, FLOOR, STEP, DROP_BPS, 0n],
@@ -151,6 +150,24 @@ describe("DXDutchAuction — step declining-price auction", function () {
 
     const cancelHash = await auction.write.cancelAuction([tokenId], { account: alice.account });
     await expectMetadataUpdate(d, cancelHash, tokenId);
+  });
+
+  it("keeps auction actions working if registrar metadata notification wiring is cleared", async function () {
+    const d = await deploy();
+    const { auction, registrar, mockUsdc, alice, owner } = d;
+    const tokenId = await registerName(d, alice, "dutch-best-effort");
+
+    await registrar.write.approve([auction.address, tokenId], { account: alice.account });
+    await registrar.write.setAuctions([ZERO, ZERO], { account: owner.account });
+
+    await auction.write.createAuction(
+      [tokenId, mockUsdc.address, START, FLOOR, STEP, DROP_BPS, 0n],
+      { account: alice.account },
+    );
+    expect(await auction.read.isOnAuction([tokenId])).to.equal(true);
+
+    await auction.write.cancelAuction([tokenId], { account: alice.account });
+    expect(await auction.read.isOnAuction([tokenId])).to.equal(false);
   });
 
   // ── price decline (the core behavior) ───────────────────────────────────────

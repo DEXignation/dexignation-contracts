@@ -68,6 +68,9 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 ///      revert하므로, 이를 "리스팅/구매 불가"로 취급한다.
 interface IDXRegistrarMarket is IERC721 {
   function nameExpires(uint256 id) external view returns (uint256);
+}
+
+interface IMetadataUpdateNotifier {
   function notifyMetadataUpdate(uint256 id) external;
 }
 
@@ -344,9 +347,9 @@ contract DXMarketplace is Ownable, ReentrancyGuard {
     Listing storage l = listings[tokenId];
     if (!l.active) revert NotListed(tokenId);
     if (l.seller != msg.sender) revert NotSeller(tokenId, msg.sender);
+    _notifyMetadataUpdate(tokenId);
     l.active = false;
     emit Cancelled(tokenId, msg.sender);
-    _notifyMetadataUpdate(tokenId);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -454,6 +457,11 @@ contract DXMarketplace is Ownable, ReentrancyGuard {
   }
 
   function _notifyMetadataUpdate(uint256 tokenId) internal {
-    registrar.notifyMetadataUpdate(tokenId);
+    try IMetadataUpdateNotifier(address(registrar)).notifyMetadataUpdate(tokenId) {
+    } catch {
+      // ERC-4906 notifications are best-effort cache invalidation signals.
+      // If registrar wiring changes, marketplace trading must keep working.
+      return;
+    }
   }
 }

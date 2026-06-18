@@ -159,6 +159,26 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
     await expectMetadataUpdate(d, settleHash, tokenId);
   });
 
+  it("keeps auction actions working if registrar metadata notification wiring is cleared", async function () {
+    const d = await deploy();
+    const { auction, registrar, mockUsdc, alice, owner, testClient } = d;
+    const tokenId = await registerName(d, alice, "eng-best-effort");
+
+    await registrar.write.approve([auction.address, tokenId], { account: alice.account });
+    await registrar.write.setAuctions([ZERO, ZERO], { account: owner.account });
+
+    await auction.write.createAuction(
+      [tokenId, mockUsdc.address, RESERVE, AUCTION_DUR],
+      { account: alice.account },
+    );
+    expect(await auction.read.isOnAuction([tokenId])).to.equal(true);
+
+    await testClient.increaseTime({ seconds: Number(AUCTION_DUR + 10n) });
+    await testClient.mine({ blocks: 1 });
+    await auction.write.settle([tokenId], { account: alice.account });
+    expect(await auction.read.isOnAuction([tokenId])).to.equal(false);
+  });
+
   // ── create ────────────────────────────────────────────────────────────────
   it("creates an auction; the NFT stays with the seller", async function () {
     const d = await deploy();
