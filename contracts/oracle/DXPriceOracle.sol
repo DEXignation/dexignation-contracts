@@ -117,7 +117,7 @@ contract DXPriceOracle is IDXPriceOracle, Ownable {
 
   /// @param _rentPrices Array of 5 attoUSD prices in order: [1y, 3y, 5y, 10y, 15y].
   ///                    1/3/5/10/15년 attoUSD 가격 배열.
-  constructor(uint256[] memory _rentPrices) Ownable(msg.sender) {
+  constructor(uint256[] memory _rentPrices, address _owner) Ownable(_owner) {
     if (_rentPrices.length != 5) revert InvalidRentPricesLength();
 
     price1Year = _rentPrices[0];

@@ -111,7 +111,7 @@ contract DXNStaking is Ownable, ReentrancyGuard {
   error TooManyRewardAssets();
   error ZeroAddress();
 
-  constructor(IERC20 _stakingToken) Ownable(msg.sender) {
+  constructor(IERC20 _stakingToken, address _owner) Ownable(_owner) {
     if (address(_stakingToken) == address(0)) revert ZeroAddress();
     stakingToken = _stakingToken;
   }

@@ -175,9 +175,9 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
 
   event GracePeriodUpdated(uint256 indexed newGracePeriod);
 
-  constructor(IDXRegistry _registry, bytes32 _baseNode, string memory _baseNodeName)
+  constructor(IDXRegistry _registry, bytes32 _baseNode, string memory _baseNodeName, address _owner)
     ERC721("DEXignation", "DEX")
-    Ownable(msg.sender)
+    Ownable(_owner)
   {
     registry = _registry;
     baseNode = _baseNode;
@@ -189,7 +189,7 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     //
     // 기본 royalty 수령자는 컨트랙트 owner. treasury 또는 Safe multisig 주소가
     // 확정되면 owner가 `setRoyaltyInfo`로 지정.
-    _setDefaultRoyalty(msg.sender, INITIAL_ROYALTY_BPS);
+    _setDefaultRoyalty(_owner, INITIAL_ROYALTY_BPS);
   }
 
   /// @notice Update the default royalty recipient and rate. Owner-only.

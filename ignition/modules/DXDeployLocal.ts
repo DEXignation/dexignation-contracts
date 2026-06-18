@@ -50,6 +50,7 @@ const STAKE_DISCOUNT_BPS = 250n;
 const SUBNAME_PROTOCOL_FEE_BPS = 500n;
 
 export default buildModule("DXDeployLocal", (m) => {
+  const owner = m.getAccount(0);
   // ── Mocks ─────────────────────────────────────────────────────────────────
   const mockUsdc = m.contract("MockERC20", ["Mock USDC", "tUSDC", 6], { 
     id: "MockUSDC" 
@@ -65,18 +66,18 @@ export default buildModule("DXDeployLocal", (m) => {
   });
 
   // ── Core protocol ─────────────────────────────────────────────────────────
-  const registry = m.contract("DXRegistry", []);
-  const registrar = m.contract("DXRegistrar", [registry, TLD_NODE, TLD]);
-  const resolver = m.contract("DXResolver", [registry]);
-  const priceOracle = m.contract("DXPriceOracle", [RENT_PRICES]);
+  const registry = m.contract("DXRegistry", [owner]);
+  const registrar = m.contract("DXRegistrar", [registry, TLD_NODE, TLD, owner]);
+  const resolver = m.contract("DXResolver", [registry, owner]);
+  const priceOracle = m.contract("DXPriceOracle", [RENT_PRICES, owner]);
   const reverseRegistrar = m.contract("DXReverseRegistrar", [registry, resolver]);
-  const controller = m.contract("DXRegistrarController", [registrar, registry, priceOracle]);
+  const controller = m.contract("DXRegistrarController", [registrar, registry, priceOracle, owner]);
 
   // ── Optional add-ons ──────────────────────────────────────────────────────
-  const reservations = m.contract("DXReservations", []);
-  const contributionSBT = m.contract("DXContributionSBT", []);
-  const dxnToken = m.contract("DXNToken", ["DEXignation Token", "DXN", DXN_CAP]);
-  const dxnStaking = m.contract("DXNStaking", [dxnToken]);
+  const reservations = m.contract("DXReservations", [owner]);
+  const contributionSBT = m.contract("DXContributionSBT", [owner]);
+  const dxnToken = m.contract("DXNToken", ["DEXignation Token", "DXN", DXN_CAP, owner]);
+  const dxnStaking = m.contract("DXNStaking", [dxnToken, owner]);
   const revenueDistributor = m.contract(
     "RevenueDistributor",
     [
@@ -91,6 +92,7 @@ export default buildModule("DXDeployLocal", (m) => {
         REVENUE_DISTRIBUTOR_BURN_BPS,
         REVENUE_DISTRIBUTOR_BUFFER_BPS,
       ],
+      owner,
     ],
   );
 
@@ -105,6 +107,7 @@ export default buildModule("DXDeployLocal", (m) => {
     resolver,
     revenueDistributor,
     SUBNAME_PROTOCOL_FEE_BPS,
+    owner,
   ]);
 
   // ── Wiring ────────────────────────────────────────────────────────────────

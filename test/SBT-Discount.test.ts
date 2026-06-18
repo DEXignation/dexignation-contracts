@@ -50,7 +50,7 @@ describe("SBT-gated discount (A1)", function () {
     // Deploy a fresh contribution SBT for the test. Constructor takes no
     // args (name/symbol are hardcoded in the contract).
     //   테스트용 기여 SBT 신규 배포. 생성자는 무인자.
-    const sbt = await viem.deployContract("DXContributionSBT", []);
+    const sbt = await viem.deployContract("DXContributionSBT", [owner.account.address]);
 
     return { ...deployed, sbt, owner, alice, bob, publicClient, testClient, viem };
   }

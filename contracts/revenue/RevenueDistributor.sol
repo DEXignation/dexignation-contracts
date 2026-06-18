@@ -83,7 +83,7 @@ contract RevenueDistributor is Ownable, ReentrancyGuard {
   error NativeTransferFailed(address to, uint256 amount);
   error StakingNotRewardAsset(address token);
 
-  constructor(Shares memory _shares) Ownable(msg.sender) {
+  constructor(Shares memory _shares, address _owner) Ownable(_owner) {
     _validateAndSet(_shares);
   }
 

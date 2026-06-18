@@ -234,7 +234,7 @@ contract DXResolver is Ownable {
     // CONSTRUCTOR & INITIALIZATION
     // ════════════════════════════════════════════════════════════════════════
 
-    constructor(IDXRegistry _registry) Ownable(msg.sender) {
+    constructor(IDXRegistry _registry, address _owner) Ownable(_owner) {
         registry = _registry;
 
         // Initialize supported languages (v1.1)

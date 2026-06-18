@@ -63,9 +63,9 @@ contract DXContributionSBT is ERC721, Ownable {
   error SoulboundNotTransferable();
   error TokenDoesNotExist(uint256 tokenId);
 
-  constructor()
+  constructor(address _owner)
     ERC721("DEXignation Contributor", "DEXC")
-    Ownable(msg.sender)
+    Ownable(_owner)
   {}
 
   /// @notice Mint a contribution badge to `contributor`. Owner-only.

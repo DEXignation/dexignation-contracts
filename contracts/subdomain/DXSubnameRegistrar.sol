@@ -195,8 +195,9 @@ contract DXSubnameRegistrar is Ownable, ReentrancyGuard {
         address _registry,
         address _defaultResolver,
         address _feeRecipient,
-        uint256 _protocolFeeBps
-    ) Ownable(msg.sender) {
+        uint256 _protocolFeeBps,
+        address _owner
+    ) Ownable(_owner) {
         if (_registry == address(0)) revert ZeroAddress();
         if (_protocolFeeBps > MAX_FEE_BPS) {
             revert FeeTooHigh(_protocolFeeBps, MAX_FEE_BPS);

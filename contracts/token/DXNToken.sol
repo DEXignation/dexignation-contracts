@@ -84,17 +84,18 @@ contract DXNToken is ERC20, ERC20Permit, ERC20Votes, Ownable {
   constructor(
     string memory name_,
     string memory symbol_,
-    uint256 cap_
+    uint256 cap_,
+    address _owner
   )
     ERC20(name_, symbol_)
     ERC20Permit(name_)
-    Ownable(msg.sender)
+    Ownable(_owner)
   {
     if (cap_ == 0) revert CapExceeded(0, 0);
     if (cap_ > type(uint208).max) revert CapExceeded(cap_, type(uint208).max);
     cap = cap_;
-    minters[msg.sender] = true;
-    emit MinterSet(msg.sender, true);
+    minters[_owner] = true;
+    emit MinterSet(_owner, true);
   }
 
   /// @notice Authorise or revoke a minter. Owner-only.

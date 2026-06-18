@@ -29,7 +29,7 @@ describe("DXReservations", function () {
   async function deploy() {
     const { viem } = await network.getOrCreate();
     const [owner, releaser, alice] = await viem.getWalletClients();
-    const reservations = await viem.deployContract("DXReservations", []);
+    const reservations = await viem.deployContract("DXReservations", [owner.account.address]);
     return { reservations, owner, releaser, alice };
   }
 

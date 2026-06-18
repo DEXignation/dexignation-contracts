@@ -75,7 +75,7 @@ contract DXReservations is Ownable {
   error NotReserved(bytes32 labelhash);
   error NotAuthorised();
 
-  constructor() Ownable(msg.sender) {}
+  constructor(address _owner) Ownable(_owner) {}
 
   /// @notice Mark a label as reserved. Owner-only.
   ///         라벨을 예약 상태로 표시. 오너 전용.

@@ -267,8 +267,9 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   constructor(
     DXRegistrar _registrar,
     IDXRegistry _registry,
-    IDXPriceOracle _priceOracle
-  ) Ownable(msg.sender) {
+    IDXPriceOracle _priceOracle,
+    address _owner
+  ) Ownable(_owner) {
     registrar = _registrar;
     registry = _registry;
     priceOracle = _priceOracle;

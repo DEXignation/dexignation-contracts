@@ -59,25 +59,27 @@ const STAKE_DISCOUNT_BPS = 250n;
 const SUBNAME_PROTOCOL_FEE_BPS = 500n;
 
 export default buildModule("DXDeployPolygon", (m) => {
-  const registry = m.contract("DXRegistry", []);
-  const registrar = m.contract("DXRegistrar", [registry, TLD_NODE, TLD]);
-  const resolver = m.contract("DXResolver", [registry]);
-  const priceOracle = m.contract("DXPriceOracle", [RENT_PRICES]);
+  const owner = m.getAccount(0);
+  const registry = m.contract("DXRegistry", [owner]);
+  const registrar = m.contract("DXRegistrar", [registry, TLD_NODE, TLD, owner]);
+  const resolver = m.contract("DXResolver", [registry, owner]);
+  const priceOracle = m.contract("DXPriceOracle", [RENT_PRICES, owner]);
   const reverseRegistrar = m.contract("DXReverseRegistrar", [registry, resolver]);
   const controller = m.contract("DXRegistrarController", [
     registrar,
     registry,
     priceOracle,
+    owner,
   ]);
 
   // Reservation registry for trademark / premium handling on mainnet.
   // 메인넷의 상표/프리미엄 라벨 처리용 예약 레지스트리.
-  const reservations = m.contract("DXReservations", []);
+  const reservations = m.contract("DXReservations", [owner]);
 
-  const contributionSBT = m.contract("DXContributionSBT", []);
+  const contributionSBT = m.contract("DXContributionSBT", [owner]);
 
-  const dxnToken = m.contract("DXNToken", ["DEXignation Token", "DXN", DXN_CAP]);
-  const dxnStaking = m.contract("DXNStaking", [dxnToken]);
+  const dxnToken = m.contract("DXNToken", ["DEXignation Token", "DXN", DXN_CAP, owner]);
+  const dxnStaking = m.contract("DXNStaking", [dxnToken, owner]);
   const revenueDistributor = m.contract(
     "RevenueDistributor",
     [
@@ -92,6 +94,7 @@ export default buildModule("DXDeployPolygon", (m) => {
         REVENUE_DISTRIBUTOR_BURN_BPS,
         REVENUE_DISTRIBUTOR_BUFFER_BPS,
       ],
+      owner,
     ],
   );
 
@@ -108,6 +111,7 @@ export default buildModule("DXDeployPolygon", (m) => {
     resolver,
     revenueDistributor,
     SUBNAME_PROTOCOL_FEE_BPS,
+    owner,
   ]);
 
   const grantTld = m.call(registry, "setSubnodeOwner", [zeroHash, TLD_LABEL_HASH, registrar], {

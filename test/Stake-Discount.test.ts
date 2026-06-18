@@ -56,6 +56,7 @@ describe("Staking discount (A2)", function () {
     ]);
     const staking = await viem.deployContract("DXNStaking", [
       stakeToken.address,
+      owner.account.address,
     ]);
 
     return {
@@ -165,7 +166,7 @@ describe("Staking discount (A2)", function () {
     );
 
     // SBT discount 20%.
-    const sbt = await viem.deployContract("DXContributionSBT", []);
+    const sbt = await viem.deployContract("DXContributionSBT", [owner.account.address]);
     await controller.write.setSBTDiscount([sbt.address, 2000n], {
       account: owner.account,
     });

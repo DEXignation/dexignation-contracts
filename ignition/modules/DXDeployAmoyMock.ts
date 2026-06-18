@@ -48,18 +48,19 @@ const MOCK_POL_USD = 40_000_000n; // $0.40 with 8 decimals.
 const SUBNAME_PROTOCOL_FEE_BPS = 500n;
 
 export default buildModule("DXDeployAmoyMock", (m) => {
+  const owner = m.getAccount(0);
   // Mock stablecoins + mock price feed (Amoy real feed is dead).
   const mockUsdc = m.contract("MockERC20", ["Test USDC", "tUSDC", 6], { id: "TestUSDC" });
   const mockUsdt = m.contract("MockERC20", ["Test USDT", "tUSDT", 6], { id: "TestUSDT" });
   const mockPolUsd = m.contract("MockPriceOracle", [8, MOCK_POL_USD], { id: "MockPolUsd" });
 
-  const registry = m.contract("DXRegistry", []);
-  const registrar = m.contract("DXRegistrar", [registry, TLD_NODE, TLD]);
-  const resolver = m.contract("DXResolver", [registry]);
-  const priceOracle = m.contract("DXPriceOracle", [RENT_PRICES]);
+  const registry = m.contract("DXRegistry", [owner]);
+  const registrar = m.contract("DXRegistrar", [registry, TLD_NODE, TLD, owner]);
+  const resolver = m.contract("DXResolver", [registry, owner]);
+  const priceOracle = m.contract("DXPriceOracle", [RENT_PRICES, owner]);
   const reverseRegistrar = m.contract("DXReverseRegistrar", [registry, resolver]);
-  const controller = m.contract("DXRegistrarController", [registrar, registry, priceOracle]);
-  const reservations = m.contract("DXReservations", []);
+  const controller = m.contract("DXRegistrarController", [registrar, registry, priceOracle, owner]);
+  const reservations = m.contract("DXReservations", [owner]);
 
   // Subname commerce module (A3). No RevenueDistributor here, so the fee
   // recipient is the deployer (account 0). Authorised as a sale module below;
@@ -71,6 +72,7 @@ export default buildModule("DXDeployAmoyMock", (m) => {
     resolver,
     m.getAccount(0),
     SUBNAME_PROTOCOL_FEE_BPS,
+    owner,
   ]);
 
   const grantTld = m.call(registry, "setSubnodeOwner", [zeroHash, TLD_LABEL_HASH, registrar], {

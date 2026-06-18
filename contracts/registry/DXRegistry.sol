@@ -102,8 +102,8 @@ contract DXRegistry is IDXRegistry {
   ///         shortly after deployment.
   ///         루트 노드의 소유자는 배포자로 설정된다. 배포자는 배포 직후
   ///         각 TLD(예: `.dex`)의 소유권을 해당 Registrar로 이전해야 한다.
-  constructor() {
-    records[0x0].owner = msg.sender;
+  constructor(address _owner) {
+    records[0x0].owner = _owner;
   }
 
   /// @dev Reverts if the node is past its expiry, or if `msg.sender` is

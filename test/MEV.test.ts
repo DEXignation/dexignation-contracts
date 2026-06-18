@@ -53,13 +53,14 @@ describe("MEV — commit-reveal resistance to parameter swapping", function () {
   }
 
   it("attacker cannot swap resolver in reveal", async function () {
-    const { controller, resolver, registry, alice, attacker, testClient, viem } =
+    const { controller, resolver, registry, owner, alice, attacker, testClient, viem } =
       await deploy();
 
     // Deploy a second resolver using the SAME viem instance (same chain).
     //   같은 chain의 두 번째 resolver 배포.
     const attackerResolver = await viem.deployContract("DXResolver", [
       registry.address,
+      owner.account.address,
     ]);
 
     const label = "victim";

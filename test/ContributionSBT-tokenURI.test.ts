@@ -24,7 +24,7 @@ describe("DXContributionSBT tokenURI", function () {
   it("escapes JSON and SVG metacharacters in tokenURI metadata", async function () {
     const { viem } = await network.getOrCreate();
     const [owner, alice] = await viem.getWalletClients();
-    const sbt = await viem.deployContract("DXContributionSBT", []);
+    const sbt = await viem.deployContract("DXContributionSBT", [owner.account.address]);
 
     const category = 'code", "trait_type":"evil <script>&\'';
     const description = 'Fixed "tokenURI" JSON\\SVG edge cases\nand tabs\ttoo';
