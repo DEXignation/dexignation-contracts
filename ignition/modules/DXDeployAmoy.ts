@@ -72,18 +72,13 @@ export default buildModule("DXDeployAmoy", (m) => {
   const resolver = m.contract("DXResolver", [registry]);
   const priceOracle = m.contract("DXPriceOracle", [RENT_PRICES]);
   const reverseRegistrar = m.contract("DXReverseRegistrar", [registry, resolver]);
-  const controller = m.contract("DXRegistrarController", [
-    registrar,
-    registry,
-    priceOracle,
-  ]);
+  const controller = m.contract("DXRegistrarController", [registrar,registry,priceOracle]);
 
   // Reservation registry — useful on Amoy for testing trademark / premium
   // flows before mainnet.
   //
   // 예약 레지스트리 — Amoy에서 상표/프리미엄 플로우 테스트용.
   const reservations = m.contract("DXReservations", []);
-
   const contributionSBT = m.contract("DXContributionSBT", []);
   const dxnToken = m.contract("DXNToken", ["DEXignation Token", "DXN", DXN_CAP]);
   const dxnStaking = m.contract("DXNStaking", [dxnToken]);
@@ -129,15 +124,9 @@ export default buildModule("DXDeployAmoy", (m) => {
     id: "GrantAddrReverseToReverseRegistrar",
   });
   m.call(registrar, "addController", [controller], { id: "AddController" });
-  m.call(priceOracle, "setPolUsdOracle", [AMOY_POL_USD_FEED], {
-    id: "SetPolUsdOracle",
-  });
-  m.call(controller, "setAllowedPaymentToken", [mockUsdc, true], {
-    id: "AllowUSDC",
-  });
-  m.call(controller, "setAllowedPaymentToken", [mockUsdt, true], {
-    id: "AllowUSDT",
-  });
+  m.call(priceOracle, "setPolUsdOracle", [AMOY_POL_USD_FEED], {id: "SetPolUsdOracle"});
+  m.call(controller, "setAllowedPaymentToken", [mockUsdc, true], {id: "AllowUSDC"});
+  m.call(controller, "setAllowedPaymentToken", [mockUsdt, true], {id: "AllowUSDT"});
   m.call(controller, "setReservations", [reservations], { id: "WireReservations" });
 
   // v2: registrar ↔ resolver wiring for transfer-time record invalidation.
@@ -183,6 +172,14 @@ export default buildModule("DXDeployAmoy", (m) => {
     DXN_PURCHASE_REWARD_PRICE_ATTO_USD,
   ], {
     id: "SetDxnPurchaseReward",
+  });
+
+  // ── Mint mock tokens ──────────────────────────────────────────────────────
+  m.call(mockUsdc, "mint", [m.getAccount(0), 10000n * 10n ** 6n], {
+    id: "MintUsdc",
+  });
+  m.call(mockUsdt, "mint", [m.getAccount(0), 10000n * 10n ** 6n], {
+    id: "MintUsdt",
   });
 
   return {
