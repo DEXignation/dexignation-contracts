@@ -53,6 +53,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 interface IDXRegistrarDutch is IERC721 {
   function nameExpires(uint256 id) external view returns (uint256);
+  function notifyMetadataUpdate(uint256 id) external;
 }
 
 interface IDXMarketplaceCheck2 {
@@ -225,6 +226,7 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
       tokenId, msg.sender, payToken, startPrice, floorPrice,
       block.timestamp, stepInterval, dropPerStep
     );
+    _notifyMetadataUpdate(tokenId);
   }
 
   // ── Current price (step) ──────────────────────────────────────────────────
@@ -297,6 +299,7 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
     if (a.seller != msg.sender) revert NotSeller(tokenId, msg.sender);
     a.settled = true;
     emit DutchAuctionCancelled(tokenId);
+    _notifyMetadataUpdate(tokenId);
   }
 
   // ── Views ─────────────────────────────────────────────────────────────────
@@ -321,5 +324,9 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
     Auction memory a = auctions[tokenId];
     return (a.seller, a.payToken, a.startPrice, a.floorPrice,
             a.startTime, a.stepInterval, a.dropPerStep, a.settled);
+  }
+
+  function _notifyMetadataUpdate(uint256 tokenId) internal {
+    registrar.notifyMetadataUpdate(tokenId);
   }
 }

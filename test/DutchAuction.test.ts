@@ -34,6 +34,8 @@ const STEP = 5n * 60n * 60n;      // 5 hours per step
 const DROP_BPS = 500n;            // 5% of start = 50,000 per step (divides evenly)
 const DROP_FIXED = USDC(40_000n); // 40,000 per step
 const MINT = USDC(2_000_000n);
+const ERC4906_INTERFACE_ID = "0x49064906";
+const METADATA_UPDATE_TOPIC = keccak256(toBytes("MetadataUpdate(uint256)"));
 
 function labelHash(l: string): `0x${string}` { return keccak256(toBytes(l)); }
 function tokenIdOf(l: string): bigint { return BigInt(labelHash(l)); }
@@ -103,6 +105,18 @@ describe("DXDutchAuction — step declining-price auction", function () {
     return Buffer.from(m[1], "base64").toString("utf8");
   }
 
+  async function expectMetadataUpdate(d: any, hash: `0x${string}`, tokenId: bigint) {
+    const receipt = await d.publicClient.waitForTransactionReceipt({ hash });
+    const encodedTokenId = encodeAbiParameters(parseAbiParameters("uint256"), [tokenId]);
+    const logs = receipt.logs.filter(
+      (log: any) =>
+        log.address.toLowerCase() === d.registrar.address.toLowerCase() &&
+        log.topics[0] === METADATA_UPDATE_TOPIC &&
+        log.data === encodedTokenId,
+    );
+    expect(logs.length).to.equal(1);
+  }
+
   // ── AUCTION mark ────────────────────────────────────────────────────────────
   it("a Dutch-auctioned name shows the AUCTION mark; clears after buy", async function () {
     const d = await deploy();
@@ -119,6 +133,24 @@ describe("DXDutchAuction — step declining-price auction", function () {
     await auction.write.buy([tokenId, START], { account: bob.account });
     svg = decodeSvg(await registrar.read.tokenURI([tokenId]) as string);
     expect(svg).to.not.include("AUCTION");
+  });
+
+  it("emits ERC-4906 MetadataUpdate when auction state changes", async function () {
+    const d = await deploy();
+    const { auction, registrar, mockUsdc, alice } = d;
+    const tokenId = await registerName(d, alice, "dutch4906");
+
+    expect(await registrar.read.supportsInterface([ERC4906_INTERFACE_ID])).to.equal(true);
+
+    await registrar.write.approve([auction.address, tokenId], { account: alice.account });
+    const createHash = await auction.write.createAuction(
+      [tokenId, mockUsdc.address, START, FLOOR, STEP, DROP_BPS, 0n],
+      { account: alice.account },
+    );
+    await expectMetadataUpdate(d, createHash, tokenId);
+
+    const cancelHash = await auction.write.cancelAuction([tokenId], { account: alice.account });
+    await expectMetadataUpdate(d, cancelHash, tokenId);
   });
 
   // ── price decline (the core behavior) ───────────────────────────────────────

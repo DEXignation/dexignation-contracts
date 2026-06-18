@@ -90,11 +90,11 @@ The marketplace supports **whole-tree 2LD trades only**. Selling a 2LD sells eve
 
 ## The "LISTED" Mark
 
-While a name is listed, its on-chain SVG shows a restrained mint-green `LISTED` label near the bottom of the hexagonal card. It does not cover the name or change the tier-colored border, and it shows **no price** — only the boolean state. `DXRegistrar.tokenURI` queries `marketplace.isListed(tokenId)` at render time, wrapped in `try/catch` so a paused or replaced marketplace can never break metadata rendering. The mark is isolated in a single `_saleMark()` function for easy restyling.
+While a name is listed, its on-chain SVG shows a restrained mint-green `LISTED` label near the bottom of the hexagonal card. It does not cover the name or change the tier-colored border, and it shows **no price** — only the boolean state. `DXRegistrar.tokenURI` queries `marketplace.isListed(tokenId)` at render time, wrapped in `try/catch` so a paused or replaced marketplace can never break metadata rendering. Listing, price-update, cancel, and sale flows call `DXRegistrar.notifyMetadataUpdate(tokenId)`, which emits ERC-4906 `MetadataUpdate` so OpenSea and other indexers can refresh cached metadata. The mark is isolated in a single `_saleMark()` function for easy restyling.
 
 <details><summary>▶ 한국어로 보기</summary>
 
-이름이 리스팅된 동안, 온체인 SVG는 육각 카드 하단에 절제된 민트그린 `LISTED` 라벨을 표시한다. 이름을 가리거나 등급 테두리를 바꾸지 않으며 **가격은 표시하지 않는다** — 불리언 상태만. `DXRegistrar.tokenURI`가 렌더 시점에 `marketplace.isListed(tokenId)`를 조회하며, `try/catch`로 감싸 마켓이 멈추거나 교체돼도 메타데이터 렌더링이 깨지지 않는다. 마크는 `_saleMark()` 함수 하나에 격리되어 재디자인이 쉽다.
+이름이 리스팅된 동안, 온체인 SVG는 육각 카드 하단에 절제된 민트그린 `LISTED` 라벨을 표시한다. 이름을 가리거나 등급 테두리를 바꾸지 않으며 **가격은 표시하지 않는다** — 불리언 상태만. `DXRegistrar.tokenURI`가 렌더 시점에 `marketplace.isListed(tokenId)`를 조회하며, `try/catch`로 감싸 마켓이 멈추거나 교체돼도 메타데이터 렌더링이 깨지지 않는다. 리스팅, 가격 변경, 취소, 판매 흐름은 `DXRegistrar.notifyMetadataUpdate(tokenId)`를 호출해 ERC-4906 `MetadataUpdate`를 emit하므로 OpenSea 같은 인덱서가 캐시된 메타데이터를 갱신할 수 있다. 마크는 `_saleMark()` 함수 하나에 격리되어 재디자인이 쉽다.
 
 </details>
 
@@ -105,8 +105,8 @@ While a name is listed, its on-chain SVG shows a restrained mint-green `LISTED` 
 | Function | Caller | Description |
 |---|---|---|
 | `list(tokenId, payToken, price)` | seller | List an owned, approved 2LD at a fixed stablecoin price |
-| `updatePrice(tokenId, newPrice)` | seller | Change the listed price (no SVG regeneration) |
-| `cancel(tokenId)` | seller | Remove the listing; the mark clears on next render |
+| `updatePrice(tokenId, newPrice)` | seller | Change the listed price and emit a metadata refresh |
+| `cancel(tokenId)` | seller | Remove the listing and emit a metadata refresh |
 | `buy(tokenId)` | buyer | Atomically pay and receive the name |
 | `isListed(tokenId)` | view | True only if listed *and* the seller still owns it |
 | `getListing(tokenId)` | view | Returns `(seller, payToken, price, active)` |
@@ -119,8 +119,8 @@ While a name is listed, its on-chain SVG shows a restrained mint-green `LISTED` 
 | 함수 | 호출자 | 설명 |
 |---|---|---|
 | `list(tokenId, payToken, price)` | 판매자 | 소유·승인된 2LD를 고정 스테이블코인 가격에 리스팅 |
-| `updatePrice(tokenId, newPrice)` | 판매자 | 리스팅 가격 변경 (SVG 재생성 없음) |
-| `cancel(tokenId)` | 판매자 | 리스팅 제거; 다음 렌더 시 마크 사라짐 |
+| `updatePrice(tokenId, newPrice)` | 판매자 | 리스팅 가격 변경 및 메타데이터 갱신 이벤트 emit |
+| `cancel(tokenId)` | 판매자 | 리스팅 제거 및 메타데이터 갱신 이벤트 emit |
 | `buy(tokenId)` | 구매자 | 원자적으로 결제하고 이름 수령 |
 | `isListed(tokenId)` | view | 리스팅됐고 *동시에* 판매자가 여전히 소유할 때만 true |
 | `getListing(tokenId)` | view | `(seller, payToken, price, active)` 반환 |

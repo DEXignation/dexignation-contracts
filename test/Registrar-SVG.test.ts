@@ -40,6 +40,7 @@ const MUD = "#a37842";
 const ORANGE = "#ff7a12";
 const YELLOW = "#ffd02c";
 const GOLD = "#ffd875";
+const METADATA_UPDATE_TOPIC = keccak256(toBytes("MetadataUpdate(uint256)"));
 
 function labelHash(label) {
   return keccak256(toBytes(label));
@@ -90,10 +91,22 @@ describe("DXRegistrar — on-chain SVG (hexagonal tier card)", function () {
   async function renewFor(deployed, label, duration) {
     const { controller, alice } = deployed;
     const price = await controller.read.rentPrice([duration]);
-    await controller.write.renew([label, duration], {
+    return controller.write.renew([label, duration], {
       account: alice.account,
       value: price,
     });
+  }
+
+  async function expectMetadataUpdate(deployed, hash, tokenId) {
+    const receipt = await deployed.publicClient.waitForTransactionReceipt({ hash });
+    const encodedTokenId = encodeAbiParameters(parseAbiParameters("uint256"), [tokenId]);
+    const logs = receipt.logs.filter(
+      (log) =>
+        log.address.toLowerCase() === deployed.registrar.address.toLowerCase() &&
+        log.topics[0] === METADATA_UPDATE_TOPIC &&
+        log.data === encodedTokenId,
+    );
+    expect(logs.length).to.equal(1);
   }
 
   async function advance(deployed, seconds) {
@@ -151,7 +164,8 @@ describe("DXRegistrar — on-chain SVG (hexagonal tier card)", function () {
     let svg = await svgFor(deployed, "climb");
     expect(svg).to.include(MUD);
 
-    await renewFor(deployed, "climb", D3Y); // total guaranteed ~6y → yellow
+    const renewHash = await renewFor(deployed, "climb", D3Y); // total guaranteed ~6y → yellow
+    await expectMetadataUpdate(deployed, renewHash, tokenIdFromLabel("climb"));
     svg = await svgFor(deployed, "climb");
     expect(svg).to.include(YELLOW);
     expect(svg).to.not.include(MUD);
@@ -207,7 +221,8 @@ describe("DXRegistrar — on-chain SVG (hexagonal tier card)", function () {
     const deployed = await deploy();
     await registerFor(deployed, "hexshape", D1Y);
     const svg = await svgFor(deployed, "hexshape");
+    expect(svg).to.include('viewBox="0 0 400 400"');
     expect(svg).to.include("<polygon");
-    expect(svg).to.include("200,40 340,130");
+    expect(svg).to.include("200,20 340,110");
   });
 });

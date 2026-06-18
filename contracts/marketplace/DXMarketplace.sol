@@ -68,6 +68,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 ///      revert하므로, 이를 "리스팅/구매 불가"로 취급한다.
 interface IDXRegistrarMarket is IERC721 {
   function nameExpires(uint256 id) external view returns (uint256);
+  function notifyMetadataUpdate(uint256 id) external;
 }
 
 /// @dev Optional view into the auction contracts, used only to enforce mutual
@@ -312,10 +313,12 @@ contract DXMarketplace is Ownable, ReentrancyGuard {
     });
 
     emit Listed(tokenId, msg.sender, payToken, price);
-    // No write to DXRegistrar: the SVG "FOR SALE" mark is derived at render
-    // time by DXRegistrar.tokenURI calling isListed(tokenId) below.
-    //   DXRegistrar에 쓰기 없음: SVG의 "FOR SALE" 마크는 렌더 시점에
-    //   DXRegistrar.tokenURI가 아래 isListed(tokenId)를 호출해 파생한다.
+    _notifyMetadataUpdate(tokenId);
+    // The SVG "LISTED" mark is still derived at render time by
+    // DXRegistrar.tokenURI calling isListed(tokenId) below. The notification
+    // only tells NFT indexers to refresh their cached metadata.
+    //   SVG의 "LISTED" 마크는 여전히 렌더 시점에 DXRegistrar.tokenURI가 아래
+    //   isListed(tokenId)를 호출해 파생한다. 알림은 NFT 인덱서 캐시 갱신용이다.
   }
 
   /// @notice Update the price of an existing listing. Seller-only.
@@ -330,6 +333,7 @@ contract DXMarketplace is Ownable, ReentrancyGuard {
     if (newPrice == 0) revert ZeroPrice();
     l.price = newPrice;
     emit PriceUpdated(tokenId, newPrice);
+    _notifyMetadataUpdate(tokenId);
   }
 
   /// @notice Cancel a listing. Seller-only. The SVG mark disappears
@@ -342,6 +346,7 @@ contract DXMarketplace is Ownable, ReentrancyGuard {
     if (l.seller != msg.sender) revert NotSeller(tokenId, msg.sender);
     l.active = false;
     emit Cancelled(tokenId, msg.sender);
+    _notifyMetadataUpdate(tokenId);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -446,5 +451,9 @@ contract DXMarketplace is Ownable, ReentrancyGuard {
   {
     Listing memory l = listings[tokenId];
     return (l.seller, l.payToken, l.price, l.active);
+  }
+
+  function _notifyMetadataUpdate(uint256 tokenId) internal {
+    registrar.notifyMetadataUpdate(tokenId);
   }
 }

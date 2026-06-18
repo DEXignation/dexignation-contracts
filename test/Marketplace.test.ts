@@ -64,6 +64,8 @@ const MINT = 1_000n * 10n ** 6n; // 1,000 USDC minted to the buyer
 // The mint-green "LISTED" label used by _saleMark() in DXRegistrar.
 const LISTED_FILL = "#00DC82";
 const LISTED_TEXT = "LISTED";
+const ERC4906_INTERFACE_ID = "0x49064906";
+const METADATA_UPDATE_TOPIC = keccak256(toBytes("MetadataUpdate(uint256)"));
 
 function labelHash(label: string): `0x${string}` {
   return keccak256(toBytes(label));
@@ -182,6 +184,18 @@ describe("DXMarketplace — fixed-price P2P sales of .dex 2LD", function () {
     return decodeTokenURI(uri as string).svg;
   }
 
+  async function expectMetadataUpdate(deployed: any, hash: `0x${string}`, tokenId: bigint) {
+    const receipt = await deployed.publicClient.waitForTransactionReceipt({ hash });
+    const encodedTokenId = encodeAbiParameters(parseAbiParameters("uint256"), [tokenId]);
+    const logs = receipt.logs.filter(
+      (log: any) =>
+        log.address.toLowerCase() === deployed.registrar.address.toLowerCase() &&
+        log.topics[0] === METADATA_UPDATE_TOPIC &&
+        log.data === encodedTokenId,
+    );
+    expect(logs.length).to.equal(1);
+  }
+
   // ── Listing + SVG mark ────────────────────────────────────────────────────
 
   it("lists roy.dex and the SVG shows the LISTED mark", async function () {
@@ -194,6 +208,32 @@ describe("DXMarketplace — fixed-price P2P sales of .dex 2LD", function () {
     const svg = await svgOf(deployed, tokenId);
     expect(svg).to.include(LISTED_FILL);
     expect(svg).to.include(LISTED_TEXT);
+  });
+
+  it("advertises ERC-4906 and emits MetadataUpdate when listing state changes", async function () {
+    const deployed = await deploy();
+    const { marketplace, registrar, mockUsdc, alice } = deployed;
+    const tokenId = await registerName(deployed, alice, "roy4906");
+
+    expect(await registrar.read.supportsInterface([ERC4906_INTERFACE_ID])).to.equal(true);
+
+    await registrar.write.approve([marketplace.address, tokenId], {
+      account: alice.account,
+    });
+    const listHash = await marketplace.write.list([tokenId, mockUsdc.address, PRICE], {
+      account: alice.account,
+    });
+    await expectMetadataUpdate(deployed, listHash, tokenId);
+
+    const updateHash = await marketplace.write.updatePrice([tokenId, PRICE + 1n], {
+      account: alice.account,
+    });
+    await expectMetadataUpdate(deployed, updateHash, tokenId);
+
+    const cancelHash = await marketplace.write.cancel([tokenId], {
+      account: alice.account,
+    });
+    await expectMetadataUpdate(deployed, cancelHash, tokenId);
   });
 
   it("an unlisted domain shows NO mark (control)", async function () {
@@ -394,10 +434,11 @@ describe("DXMarketplace — fixed-price P2P sales of .dex 2LD", function () {
 
     // Alice transfers the NFT to carol AFTER listing (stale listing).
     //   alice가 리스팅 후 NFT를 carol에게 전송 (stale 리스팅).
-    await registrar.write.transferFrom(
+    const transferHash = await registrar.write.transferFrom(
       [alice.account.address, carol.account.address, tokenId],
       { account: alice.account },
     );
+    await expectMetadataUpdate(deployed, transferHash, tokenId);
 
     // isListed now reflects the stale state → false (seller no longer owns).
     expect(await marketplace.read.isListed([tokenId])).to.equal(false);

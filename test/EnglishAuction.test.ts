@@ -35,6 +35,8 @@ const AUCTION_DUR = 3600n;        // 1 hour
 const RESERVE = 100n * 10n ** 6n; // 100 USDC
 const MINT = 10_000n * 10n ** 6n;
 const GRACE_PERIOD = 70n * 24n * 60n * 60n;
+const ERC4906_INTERFACE_ID = "0x49064906";
+const METADATA_UPDATE_TOPIC = keccak256(toBytes("MetadataUpdate(uint256)"));
 
 function labelHash(l: string): `0x${string}` { return keccak256(toBytes(l)); }
 function tokenIdOf(l: string): bigint { return BigInt(labelHash(l)); }
@@ -105,6 +107,18 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
     return Buffer.from(m[1], "base64").toString("utf8");
   }
 
+  async function expectMetadataUpdate(d: any, hash: `0x${string}`, tokenId: bigint) {
+    const receipt = await d.publicClient.waitForTransactionReceipt({ hash });
+    const encodedTokenId = encodeAbiParameters(parseAbiParameters("uint256"), [tokenId]);
+    const logs = receipt.logs.filter(
+      (log: any) =>
+        log.address.toLowerCase() === d.registrar.address.toLowerCase() &&
+        log.topics[0] === METADATA_UPDATE_TOPIC &&
+        log.data === encodedTokenId,
+    );
+    expect(logs.length).to.equal(1);
+  }
+
   // ── AUCTION mark ────────────────────────────────────────────────────────────
   it("an auctioned name shows the AUCTION mark; it clears after settle", async function () {
     const d = await deploy();
@@ -125,6 +139,26 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
     expect(svg).to.not.include("AUCTION");
   });
 
+  it("emits ERC-4906 MetadataUpdate when auction state changes", async function () {
+    const d = await deploy();
+    const { auction, registrar, mockUsdc, alice, testClient } = d;
+    const tokenId = await registerName(d, alice, "eng4906");
+
+    expect(await registrar.read.supportsInterface([ERC4906_INTERFACE_ID])).to.equal(true);
+
+    await registrar.write.approve([auction.address, tokenId], { account: alice.account });
+    const createHash = await auction.write.createAuction(
+      [tokenId, mockUsdc.address, RESERVE, AUCTION_DUR],
+      { account: alice.account },
+    );
+    await expectMetadataUpdate(d, createHash, tokenId);
+
+    await testClient.increaseTime({ seconds: Number(AUCTION_DUR + 10n) });
+    await testClient.mine({ blocks: 1 });
+    const settleHash = await auction.write.settle([tokenId], { account: alice.account });
+    await expectMetadataUpdate(d, settleHash, tokenId);
+  });
+
   // ── create ────────────────────────────────────────────────────────────────
   it("creates an auction; the NFT stays with the seller", async function () {
     const d = await deploy();
@@ -141,6 +175,7 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
     const marketplace = await d.viem.deployContract("DXMarketplace", [
       d.registrar.address, d.owner.account.address, FEE_BPS]);
     await marketplace.write.setPayToken([d.mockUsdc.address, true], { account: d.owner.account });
+    await d.registrar.write.setMarketplace([marketplace.address], { account: d.owner.account });
     await d.auction.write.setMarketplace([marketplace.address], { account: d.owner.account });
 
     const tokenId = await registerName(d, d.alice, "dual");
@@ -282,8 +317,9 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
     await fund(d, bob);
     await auction.write.bid([tokenId, RESERVE], { account: bob.account });
     // alice moves the NFT to dave after the bid
-    await registrar.write.transferFrom([alice.account.address, dave.account.address, tokenId],
+    const transferHash = await registrar.write.transferFrom([alice.account.address, dave.account.address, tokenId],
       { account: alice.account });
+    await expectMetadataUpdate(d, transferHash, tokenId);
     await testClient.increaseTime({ seconds: Number(AUCTION_DUR + 10n) });
     await testClient.mine({ blocks: 1 });
 

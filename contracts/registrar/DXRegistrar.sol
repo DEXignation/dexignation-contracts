@@ -237,6 +237,26 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     emit MarketplaceUpdated(_marketplace);
   }
 
+  /// @notice Notify NFT indexers that sale-state metadata for `tokenId` changed.
+  ///         Only the configured marketplace or auction contracts may call this.
+  ///         The metadata itself is still derived dynamically in `tokenURI`; this
+  ///         event is the ERC-4906 cache-invalidation signal used by marketplaces
+  ///         like OpenSea to re-fetch it.
+  ///         `tokenId`의 판매 상태 메타데이터가 바뀌었음을 NFT 인덱서에 알린다.
+  ///         설정된 마켓플레이스 또는 경매 컨트랙트만 호출 가능. 메타데이터는
+  ///         여전히 `tokenURI`에서 동적으로 파생되며, 이 이벤트는 OpenSea 같은
+  ///         마켓의 캐시 갱신 신호다.
+  function notifyMetadataUpdate(uint256 tokenId) external override {
+    if (
+      msg.sender != address(marketplace) &&
+      msg.sender != address(englishAuction) &&
+      msg.sender != address(dutchAuction)
+    ) {
+      revert Unauthorized();
+    }
+    emit MetadataUpdate(tokenId);
+  }
+
   /// @notice Set (or clear) the auction contracts used for the AUCTION mark.
   ///         Owner-only. Pass address(0) for either to disable that lookup.
   ///         Cosmetic wiring only — grants the auctions NO transfer rights.
@@ -433,6 +453,7 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
 
     registry.setSubnodeExpires(baseNode, bytes32(id), expiries[id]);
     emit NameRenewed(id, expiries[id]);
+    emit MetadataUpdate(id);
 
     return expiries[id];
   }
@@ -552,6 +573,7 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
       if (address(recordResolver) != address(0)) {
         recordResolver.bumpVersion(node);
       }
+      emit MetadataUpdate(tokenId);
     }
     return from;
   }
@@ -720,11 +742,11 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
 
     // Hexagon points for a 400x400 canvas, centered, matching the DEX logo.
     //   400x400 캔버스 기준, DEX 로고 형태의 중앙 육각형 좌표.
-    string memory hexPts = "200,40 340,130 340,310 200,400 60,310 60,130";
-    string memory hexInner = "200,70 314,143 314,297 200,370 86,297 86,143";
+    string memory hexPts = "200,20 340,110 340,290 200,380 60,290 60,110";
+    string memory hexInner = "200,50 314,123 314,277 200,350 86,277 86,123";
 
     string memory head = string.concat(
-      '<svg width="400" height="400" xmlns="http://www.w3.org/2000/svg">'
+      '<svg width="400" height="400" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">'
       '<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">'
       '<stop offset="0%" stop-color="', c0, '"/>'
       '<stop offset="38%" stop-color="', c1, '"/>'
@@ -774,14 +796,14 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
   function _saleMark(uint8 saleState) internal pure returns (string memory) {
     if (saleState == 1) {
       return string.concat(
-        '<text x="200" y="330" text-anchor="middle" font-family="monospace" '
+        '<text x="200" y="310" text-anchor="middle" font-family="monospace" '
         'font-weight="400" font-size="15" fill="#00DC82" letter-spacing="2">'
         'LISTED</text>'
       );
     }
     if (saleState == 2) {
       return string.concat(
-        '<text x="200" y="330" text-anchor="middle" font-family="monospace" '
+        '<text x="200" y="310" text-anchor="middle" font-family="monospace" '
         'font-weight="400" font-size="15" fill="#FFB020" letter-spacing="2">'
         'AUCTION</text>'
       );
@@ -831,10 +853,10 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
       lineCount += 1;
     }
 
-    // Vertically center the name block around y=195; .dex sits below it.
-    //   이름 블록을 y=195 중심으로 세로 중앙 정렬; .dex는 그 아래.
+    // Vertically center the name block around y=175; .dex sits below it.
+    //   이름 블록을 y=175 중심으로 세로 중앙 정렬; .dex는 그 아래.
     uint256 lineH = fontSize + 4;
-    uint256 blockTop = 195 - (lineCount * lineH) / 2;
+    uint256 blockTop = 175 - (lineCount * lineH) / 2;
 
     string memory nameText = "";
     for (uint256 i = 0; i < lineCount; i++) {
@@ -887,6 +909,6 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     override(ERC721, ERC2981, IERC165)
     returns (bool)
   {
-    return super.supportsInterface(interfaceId);
+    return interfaceId == bytes4(0x49064906) || super.supportsInterface(interfaceId);
   }
 }

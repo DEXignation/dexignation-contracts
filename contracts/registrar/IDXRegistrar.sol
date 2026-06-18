@@ -28,12 +28,12 @@
 
 pragma solidity ^0.8.28;
 
-import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {IERC4906} from "@openzeppelin/contracts/interfaces/IERC4906.sol";
 
 /// @title  IDXRegistrar
 /// @notice Interface for DEXignation's ERC-721 backed name registrar.
 ///         ERC-721 기반 DEXignation 네임 Registrar 인터페이스.
-interface IDXRegistrar is IERC721 {
+interface IDXRegistrar is IERC4906 {
 
   // ── Events ────────────────────────────────────────────────────────────────
 
@@ -104,6 +104,8 @@ interface IDXRegistrar is IERC721 {
   function renew(uint256 id, uint256 duration) external returns (uint256);
 
   function reclaim(uint256 id, address owner) external;
+
+  function notifyMetadataUpdate(uint256 id) external;
 
   /// @notice Burn an expired domain NFT after the grace period has passed.
   ///         만료된 도메인 NFT를 유예 기간 이후 소각.

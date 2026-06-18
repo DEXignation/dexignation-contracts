@@ -45,6 +45,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 interface IDXRegistrarAuction is IERC721 {
   function nameExpires(uint256 id) external view returns (uint256);
+  function notifyMetadataUpdate(uint256 id) external;
 }
 
 /// @dev Optional view into the fixed-price marketplace, used only to enforce
@@ -217,6 +218,7 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
       highestBidder: address(0), highestBid: 0, settled: false
     });
     emit AuctionCreated(tokenId, msg.sender, payToken, reservePrice, block.timestamp + duration);
+    _notifyMetadataUpdate(tokenId);
   }
 
   // ── Bid ─────────────────────────────────────────────────────────────────
@@ -288,6 +290,7 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
 
     if (a.highestBidder == address(0)) {
       emit AuctionEndedNoBid(tokenId);
+      _notifyMetadataUpdate(tokenId);
       return; // name stays with the seller; nothing escrowed
     }
 
@@ -304,11 +307,13 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
       if (currentOwner != a.seller) {
         pendingReturns[a.payToken][a.highestBidder] += a.highestBid;
         emit AuctionSettledNoTransfer(tokenId, a.highestBidder, a.highestBid);
+        _notifyMetadataUpdate(tokenId);
         return;
       }
     } catch {
       pendingReturns[a.payToken][a.highestBidder] += a.highestBid;
       emit AuctionSettledNoTransfer(tokenId, a.highestBidder, a.highestBid);
+      _notifyMetadataUpdate(tokenId);
       return;
     }
 
@@ -336,6 +341,7 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
     if (a.highestBidder != address(0)) revert HasBids(tokenId);
     a.settled = true;
     emit AuctionCancelled(tokenId);
+    _notifyMetadataUpdate(tokenId);
   }
 
   // ── Views ─────────────────────────────────────────────────────────────────
@@ -361,5 +367,9 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
     Auction memory a = auctions[tokenId];
     return (a.seller, a.payToken, a.reservePrice, a.endTime,
             a.highestBidder, a.highestBid, a.settled);
+  }
+
+  function _notifyMetadataUpdate(uint256 tokenId) internal {
+    registrar.notifyMetadataUpdate(tokenId);
   }
 }
