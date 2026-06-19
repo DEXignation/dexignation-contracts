@@ -1,8 +1,8 @@
 # DEXignation — Polygon Mainnet Deployment Record
 
-> Canonical deployment of the DEXignation (`.dex`) name service core contracts
-> on Polygon mainnet (chainId 137), deployed deterministically via CreateX
-> with `0xdeed…` vanity addresses.
+> Canonical deployment of the DEXignation (`.dex`) name service contracts
+> on Polygon mainnet (chainId 137) — 12 core + 4 trading — deployed
+> deterministically via CreateX with `0xdeed…` vanity addresses.
 
 ## Summary
 
@@ -13,8 +13,8 @@
 | CreateX factory | `0xba5Ed099633D3B313e4D5F7bdc1305d3c28ba5Ed` |
 | Deployer (gas) | `0xd32BEFBB3deBDa5D1Eb43Ccf3Ce46aFE82732572` |
 | Contract owner | `0xd32BEFBB3deBDa5D1Eb43Ccf3Ce46aFE82732572` |
-| Vanity prefix | `0xdeed` (all 12 core contracts) |
-| Deploy blocks | 88717287 – 88717319 |
+| Vanity prefix | `0xdeed` (all 16 contracts) |
+| Deploy blocks | core 88717287–88717319, trading 88751231–88751239 |
 | Compiler | solc 0.8.28, optimizer runs=200, viaIR=true, evmVersion=cancun |
 | TLD | `.dex` |
 
@@ -98,6 +98,65 @@ RevenueDistributor split: treasury 60% / staking 30% / burn 0% / buffer 10%.
 17. `dxnToken.setMinter(controller, true)`
 18. `controller.setDxnReward(dxnToken, 1000 bps, 2e18 atto-USD price)`
 
+## Trading / Commerce Layer
+
+> Deployed on top of the core, same deterministic CreateX method, `0xdeed…`
+> vanity addresses, owner-controlled. Fee recipient routes to RevenueDistributor.
+
+| # | Deed | Contract | Address |
+|---|------|----------|---------|
+| 12 | deed12 | DXMarketplace | `0xdEED12D92639696Df4EfF29526FF952F52F67C47` |
+| 13 | deed13 | DXEnglishAuction | `0xdeEd13e0283366f1E7F85261C4064A5933D19858` |
+| 14 | deed14 | DXDutchAuction | `0xDeEd149C56702EA4514282C75E40B14F67Ad9551` |
+| 15 | deed15 | DXSubscriptionRenewer | `0xdEEd150e11499D6170154d01F96A89757c1F2F93` |
+
+### Trading Deployment Transactions
+
+| Contract | Block | Tx hash |
+|----------|-------|---------|
+| DXMarketplace | 88751231 | `0x4d8e40b09277c61b6ccb31c58f9095c5f96d6f91b484bf3bae13b395755c15b8` |
+| DXEnglishAuction | 88751234 | `0x0cc2404e3e21638e3fead27dabcaca199d739bee9648a3cfcff26c4cc22aa75e` |
+| DXDutchAuction | 88751236 | `0x8b978a4dc75701760b8a9da262b46b32cb173b0eee90443c4b4cc1aa5758dc42` |
+| DXSubscriptionRenewer | 88751239 | `0xcea600c577deb9357619aae7cdf0972a398192d43302f03b045665277903cbe7` |
+
+### Trading Constructor Configuration
+
+| Contract | Constructor args |
+|----------|------------------|
+| DXMarketplace | `(registrar, feeRecipient, 250, owner)` |
+| DXEnglishAuction | `(registrar, feeRecipient, 250, 500, 600, 600, owner)` |
+| DXDutchAuction | `(registrar, feeRecipient, 250, owner)` |
+| DXSubscriptionRenewer | `(controller, registrar, 30 days, owner)` |
+
+- `feeRecipient` = RevenueDistributor (deed9, `0xdEEd9070Ae32135D91e2B42758e6ea936Dd31F7E`)
+- `registrar` = DXRegistrar (deed2), `controller` = DXRegistrarController (deed10)
+- Protocol fee 2.5% (250 bps) on marketplace and both auctions
+- English: 5% min increment, 10-min anti-snipe window (+10 min extend)
+- Subscription renewal window: 30 days before expiry
+
+### Trading Post-deploy Wiring (11 calls, all signed by `owner`)
+
+1. `registrar.setMarketplace(marketplace)` — LISTED mark
+2. `registrar.setAuctions(english, dutch)` — AUCTION mark
+3. `marketplace.setAuctionContracts(english, dutch)` — mutual exclusion
+4. `english.setMarketplace(marketplace)`
+5. `dutch.setMarketplace(marketplace)`
+6-7. `marketplace.setPayToken(USDC/USDT, true)`
+8-9. `english.setPayToken(USDC/USDT, true)`
+10-11. `dutch.setPayToken(USDC/USDT, true)`
+
+`DXSubscriptionRenewer` needs no extra wiring — it calls the controller's public
+`renew` / `renewWithToken`; its `controller` / `registrar` are set in the constructor.
+
+### Trading Notes
+
+- Metadata-notification fix: the auction/marketplace `_notifyMetadataUpdate`
+  helpers guard the registrar call with `registrar.<slot>() == address(this)`, so a
+  cleared/replaced notifier wiring never reverts a core trade (list / createAuction /
+  buy / settle), while the ERC-4906 `MetadataUpdate` still fires under normal wiring.
+- All four trading contracts take an explicit `address _owner` constructor arg
+  (same CreateX-owner fix as the core); owner is `0xd32B…`, not the CreateX factory.
+
 ## External Addresses (Polygon mainnet)
 
 | Name | Address |
@@ -116,7 +175,7 @@ RevenueDistributor split: treasury 60% / staking 30% / burn 0% / buffer 10%.
 
 ## Outstanding Operational Tasks
 
-- [ ] Verify all 12 contracts on Polygonscan (same compiler settings).
+- [ ] Verify all 16 contracts on Polygonscan (same compiler settings).
 - [ ] (Optional) Repoint DXRegistrar royalty recipient to treasury via `setRoyaltyInfo`.
 - [ ] (Optional) Transfer ownership to a multisig (Safe) via `transferOwnership` per contract.
 - [ ] Build MetaMask Snap + resolver API reading DXResolver for cross-chain `.dex` lookup.

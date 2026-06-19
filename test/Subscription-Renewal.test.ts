@@ -72,6 +72,7 @@ describe("DXSubscriptionRenewer — auto-renewal", function () {
       deployed.controller.address,
       deployed.registrar.address,
       RENEWAL_WINDOW,
+      owner.account.address,
     ]);
 
     // Allow USDC as a payment token on the controller (owner-only).

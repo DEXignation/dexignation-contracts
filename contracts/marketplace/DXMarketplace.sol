@@ -68,10 +68,8 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 ///      revert하므로, 이를 "리스팅/구매 불가"로 취급한다.
 interface IDXRegistrarMarket is IERC721 {
   function nameExpires(uint256 id) external view returns (uint256);
-}
-
-interface IMetadataUpdateNotifier {
   function notifyMetadataUpdate(uint256 id) external;
+  function marketplace() external view returns (address);
 }
 
 /// @dev Optional view into the auction contracts, used only to enforce mutual
@@ -200,8 +198,9 @@ contract DXMarketplace is Ownable, ReentrancyGuard {
   constructor(
     address _registrar,
     address _feeRecipient,
-    uint256 _protocolFeeBps
-  ) Ownable(msg.sender) {
+    uint256 _protocolFeeBps,
+    address _owner
+  ) Ownable(_owner) {
     if (_registrar == address(0)) revert ZeroAddress();
     if (_protocolFeeBps > MAX_FEE_BPS) {
       revert FeeTooHigh(_protocolFeeBps, MAX_FEE_BPS);
@@ -347,9 +346,9 @@ contract DXMarketplace is Ownable, ReentrancyGuard {
     Listing storage l = listings[tokenId];
     if (!l.active) revert NotListed(tokenId);
     if (l.seller != msg.sender) revert NotSeller(tokenId, msg.sender);
-    _notifyMetadataUpdate(tokenId);
     l.active = false;
     emit Cancelled(tokenId, msg.sender);
+    _notifyMetadataUpdate(tokenId);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -457,11 +456,10 @@ contract DXMarketplace is Ownable, ReentrancyGuard {
   }
 
   function _notifyMetadataUpdate(uint256 tokenId) internal {
-    try IMetadataUpdateNotifier(address(registrar)).notifyMetadataUpdate(tokenId) {
-    } catch {
-      // ERC-4906 notifications are best-effort cache invalidation signals.
-      // If registrar wiring changes, marketplace trading must keep working.
-      return;
+    // Cosmetic ERC-4906 ping. Only call if still the registrar's marketplace notifier.
+    //   표시용 ERC-4906 알림. registrar의 marketplace notifier일 때만 호출.
+    if (registrar.marketplace() == address(this)) {
+      registrar.notifyMetadataUpdate(tokenId);
     }
   }
 }

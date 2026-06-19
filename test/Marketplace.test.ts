@@ -109,6 +109,7 @@ describe("DXMarketplace — fixed-price P2P sales of .dex 2LD", function () {
       deployed.registrar.address,
       owner.account.address,
       FEE_BPS,
+      owner.account.address,
     ]);
 
     // Wire the marketplace to the registrar so tokenURI can derive the mark,

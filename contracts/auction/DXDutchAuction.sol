@@ -53,10 +53,8 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 interface IDXRegistrarDutch is IERC721 {
   function nameExpires(uint256 id) external view returns (uint256);
-}
-
-interface IMetadataUpdateNotifier {
   function notifyMetadataUpdate(uint256 id) external;
+  function dutchAuction() external view returns (address);
 }
 
 interface IDXMarketplaceCheck2 {
@@ -130,8 +128,8 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
   error FeeTooHigh(uint256 requested, uint256 max);
 
   constructor(
-    address _registrar, address _feeRecipient, uint256 _protocolFeeBps
-  ) Ownable(msg.sender) {
+    address _registrar, address _feeRecipient, uint256 _protocolFeeBps, address _owner
+  ) Ownable(_owner) {
     if (_registrar == address(0)) revert ZeroAddress();
     if (_protocolFeeBps > MAX_FEE_BPS) revert FeeTooHigh(_protocolFeeBps, MAX_FEE_BPS);
     registrar = IDXRegistrarDutch(_registrar);
@@ -330,11 +328,13 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
   }
 
   function _notifyMetadataUpdate(uint256 tokenId) internal {
-    try IMetadataUpdateNotifier(address(registrar)).notifyMetadataUpdate(tokenId) {
-    } catch {
-      // ERC-4906 notifications are best-effort cache invalidation signals.
-      // If registrar wiring changes, auction trading must keep working.
-      return;
+    // Cosmetic ERC-4906 ping. Only call if the registrar still recognizes this
+    // contract as its Dutch-auction notifier; otherwise skip silently so the
+    // core trade never depends on notifier wiring.
+    //   표시용 ERC-4906 알림. registrar가 이 컨트랙트를 Dutch 경매 notifier로
+    //   인식할 때만 호출하고, 아니면 조용히 건너뛴다 — 핵심 거래는 이에 의존하지 않음.
+    if (registrar.dutchAuction() == address(this)) {
+      registrar.notifyMetadataUpdate(tokenId);
     }
   }
 }

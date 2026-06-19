@@ -45,10 +45,8 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 interface IDXRegistrarAuction is IERC721 {
   function nameExpires(uint256 id) external view returns (uint256);
-}
-
-interface IMetadataUpdateNotifier {
   function notifyMetadataUpdate(uint256 id) external;
+  function englishAuction() external view returns (address);
 }
 
 /// @dev Optional view into the fixed-price marketplace, used only to enforce
@@ -154,8 +152,9 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
     uint256 _protocolFeeBps,
     uint256 _minIncrementBps,
     uint256 _extendWindow,
-    uint256 _extendBy
-  ) Ownable(msg.sender) {
+    uint256 _extendBy,
+    address _owner
+  ) Ownable(_owner) {
     if (_registrar == address(0)) revert ZeroAddress();
     if (_protocolFeeBps > MAX_FEE_BPS) revert FeeTooHigh(_protocolFeeBps, MAX_FEE_BPS);
     if (_minIncrementBps == 0) revert ZeroMinIncrement();
@@ -373,11 +372,10 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
   }
 
   function _notifyMetadataUpdate(uint256 tokenId) internal {
-    try IMetadataUpdateNotifier(address(registrar)).notifyMetadataUpdate(tokenId) {
-    } catch {
-      // ERC-4906 notifications are best-effort cache invalidation signals.
-      // If registrar wiring changes, auction settlement/trading must keep working.
-      return;
+    // Cosmetic ERC-4906 ping. Only call if still the registrar's English notifier.
+    //   표시용 ERC-4906 알림. registrar의 English notifier일 때만 호출.
+    if (registrar.englishAuction() == address(this)) {
+      registrar.notifyMetadataUpdate(tokenId);
     }
   }
 }

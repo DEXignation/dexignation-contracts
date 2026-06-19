@@ -55,7 +55,7 @@ describe("DXDutchAuction — step declining-price auction", function () {
     const testClient = await viem.getTestClient();
 
     const auction = await viem.deployContract("DXDutchAuction", [
-      deployed.registrar.address, owner.account.address, FEE_BPS]);
+      deployed.registrar.address, owner.account.address, FEE_BPS, owner.account.address]);
     await auction.write.setPayToken([deployed.mockUsdc.address, true], { account: owner.account });
     // Wire as the Dutch slot so tokenURI renders the AUCTION mark.
     //   둘째(네덜란드) 슬롯으로 연결해 tokenURI가 AUCTION 마크를 그리게 함.

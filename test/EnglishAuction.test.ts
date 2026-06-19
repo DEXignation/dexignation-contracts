@@ -58,6 +58,7 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
     const auction = await viem.deployContract("DXEnglishAuction", [
       deployed.registrar.address, owner.account.address, FEE_BPS,
       MIN_INCREMENT_BPS, EXTEND_WINDOW, EXTEND_BY,
+      owner.account.address,
     ]);
     await auction.write.setPayToken([deployed.mockUsdc.address, true], { account: owner.account });
     // Wire the auction to the registrar so tokenURI can render the AUCTION mark.
@@ -193,7 +194,7 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
     const d = await deploy();
     // deploy + wire a marketplace; list there first
     const marketplace = await d.viem.deployContract("DXMarketplace", [
-      d.registrar.address, d.owner.account.address, FEE_BPS]);
+      d.registrar.address, d.owner.account.address, FEE_BPS, d.owner.account.address]);
     await marketplace.write.setPayToken([d.mockUsdc.address, true], { account: d.owner.account });
     await d.registrar.write.setMarketplace([marketplace.address], { account: d.owner.account });
     await d.auction.write.setMarketplace([marketplace.address], { account: d.owner.account });
@@ -397,6 +398,7 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
       d.viem.deployContract("DXEnglishAuction", [
         d.registrar.address, d.owner.account.address, FEE_BPS,
         0n, EXTEND_WINDOW, EXTEND_BY,
+        d.owner.account.address,
       ]),
       "ZeroMinIncrement",
     );

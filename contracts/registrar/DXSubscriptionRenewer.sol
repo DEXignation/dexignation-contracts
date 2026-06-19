@@ -141,8 +141,9 @@ contract DXSubscriptionRenewer is Ownable, ReentrancyGuard {
   constructor(
     address _controller,
     address _registrar,
-    uint256 _renewalWindow
-  ) Ownable(msg.sender) {
+    uint256 _renewalWindow,
+    address _owner
+  ) Ownable(_owner) {
     if (_controller == address(0) || _registrar == address(0)) {
       revert ZeroAddress();
     }

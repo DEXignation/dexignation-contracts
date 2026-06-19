@@ -54,6 +54,7 @@ describe("DXSubscriptionRenewer — USDT (non-standard approve)", function () {
       deployed.controller.address,
       deployed.registrar.address,
       RENEWAL_WINDOW,
+      owner.account.address,
     ]);
 
     await deployed.controller.write.setAllowedPaymentToken(
