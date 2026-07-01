@@ -27,7 +27,7 @@ const USDT_ADDRESS = (process.env.USDT_ADDRESS || "") as `0x${string}`;
 const FEE_BPS = 250n;             // 2.5%
 const MIN_INCREMENT_BPS = 500n;   // 영국식 최소 입찰 증가 +5%
 const EXTEND_WINDOW = 600n;       // 마감 10분 이내 입찰 시 …
-const EXTEND_BY = 600n;           //   … +10분 연장
+const EXTEND_BY = 1200n;          //   … +20분 연장
 
 const ZERO = "0x0000000000000000000000000000000000000000" as const;
 
@@ -77,7 +77,11 @@ async function main() {
   await pub.waitForTransactionReceipt({ hash: await english.write.setMarketplace([marketplace.address]) });
   console.log("  english.setMarketplace ✓ (리스팅 중이면 경매 거부)");
   await pub.waitForTransactionReceipt({ hash: await dutch.write.setMarketplace([marketplace.address]) });
-  console.log("  dutch.setMarketplace ✓\n");
+  console.log("  dutch.setMarketplace ✓");
+  await pub.waitForTransactionReceipt({ hash: await english.write.setPeerAuction([dutch.address]) });
+  console.log("  english.setPeerAuction ✓ (네덜란드식 경매 중이면 영국식 거부)");
+  await pub.waitForTransactionReceipt({ hash: await dutch.write.setPeerAuction([english.address]) });
+  console.log("  dutch.setPeerAuction ✓ (영국식 경매 중이면 네덜란드식 거부)\n");
 
   // ── 4. 결제 토큰 화이트리스트 ────────────────────────────────────────────────
   console.log("── 4. 결제 토큰 화이트리스트 ──");

@@ -56,6 +56,13 @@ interface IDXMarketplaceCheck {
   function isListed(uint256 tokenId) external view returns (bool);
 }
 
+/// @dev Optional view into another auction contract, used to enforce
+///      cross-auction mutual exclusion (English vs Dutch).
+///      다른 경매 컨트랙트 조회(상호 배타 강제 전용): 영국식·네덜란드식 동시 경매 불가.
+interface IDXAuctionCheck {
+  function isOnAuction(uint256 tokenId) external view returns (bool);
+}
+
 /// @title  DXEnglishAuction
 /// @notice Timed ascending auction for `.dex` 2LD names, settled in a
 ///         whitelisted stablecoin, with escrowed bids, pull refunds,
@@ -69,6 +76,12 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
   address public feeRecipient;
   uint256 public protocolFeeBps;
   uint256 public constant MAX_FEE_BPS = 1000; // 10%
+  uint256 public constant MIN_DURATION_LIMIT = 1 days;
+  uint256 public constant MAX_DURATION_LIMIT = 30 days;
+  uint256 public minAuctionDuration = MIN_DURATION_LIMIT;
+  uint256 public maxAuctionDuration = MAX_DURATION_LIMIT;
+  uint8 public constant DEFAULT_MAX_EXTENSIONS = 3;
+  uint8 public maxExtensions;
 
   /// @notice Minimum bid increment over the current top, in bps (e.g. 500 = 5%).
   ///         직전 최고가 대비 최소 입찰 증가율(bps, 500 = 5%).
@@ -84,6 +97,10 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
   ///         상호 배타 강제용 고정가 마켓(선택).
   IDXMarketplaceCheck public marketplace;
 
+  /// @notice Optional peer auction, queried for English/Dutch mutual exclusion.
+  ///         영국식/네덜란드식 상호 배타 강제용 상대 경매(선택).
+  IDXAuctionCheck public peerAuction;
+
   mapping(address => bool) public allowedPayToken;
 
   // ── Auction state ─────────────────────────────────────────────────────────
@@ -95,6 +112,7 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
     uint256 endTime;
     address highestBidder;
     uint256 highestBid;
+    uint8   extensionCount;
     bool    settled;
   }
 
@@ -111,7 +129,10 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
   event ProtocolFeeSet(uint256 bps);
   event PayTokenSet(address indexed token, bool allowed);
   event MarketplaceSet(address indexed marketplace);
+  event PeerAuctionSet(address indexed auction);
   event AuctionParamsSet(uint256 minIncrementBps, uint256 extendWindow, uint256 extendBy);
+  event MaxExtensionsSet(uint8 maxExtensions);
+  event AuctionDurationBoundsSet(uint256 minDuration, uint256 maxDuration);
 
   event AuctionCreated(
     uint256 indexed tokenId, address indexed seller, address indexed payToken,
@@ -130,21 +151,24 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
   error UnsupportedPayToken(address token);
   error ZeroReserve();
   error NotTokenOwner(uint256 tokenId, address caller);
+  error SellerNoLongerOwns(uint256 tokenId);
   error AuctionNotApproved(uint256 tokenId);
   error AlreadyAuctioned(uint256 tokenId);
   error ListedElsewhere(uint256 tokenId);
+  error AuctionedElsewhere(uint256 tokenId);
   error AuctionNotFound(uint256 tokenId);
   error AuctionEnded(uint256 tokenId);
   error AuctionNotYetEnded(uint256 tokenId);
   error AlreadySettled(uint256 tokenId);
   error BidTooLow(uint256 sent, uint256 minRequired);
-  error SellerNoLongerOwns(uint256 tokenId); // reserved (settle now ends gracefully)
   error NotSeller(uint256 tokenId, address caller);
   error HasBids(uint256 tokenId);
   error NothingToWithdraw();
   error FeeTooHigh(uint256 requested, uint256 max);
   error BadDuration();
+  error BadDurationBounds();
   error ZeroMinIncrement();
+  error BadExtension();
 
   constructor(
     address _registrar,
@@ -158,12 +182,14 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
     if (_registrar == address(0)) revert ZeroAddress();
     if (_protocolFeeBps > MAX_FEE_BPS) revert FeeTooHigh(_protocolFeeBps, MAX_FEE_BPS);
     if (_minIncrementBps == 0) revert ZeroMinIncrement();
+    if (_extendBy <= _extendWindow) revert BadExtension();
     registrar = IDXRegistrarAuction(_registrar);
     feeRecipient = _feeRecipient;
     protocolFeeBps = _protocolFeeBps;
     minIncrementBps = _minIncrementBps;
     extendWindow = _extendWindow;
     extendBy = _extendBy;
+    maxExtensions = DEFAULT_MAX_EXTENSIONS;
   }
 
   // ── Owner config ──────────────────────────────────────────────────────────
@@ -179,10 +205,28 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
   function setMarketplace(address m) external onlyOwner {
     marketplace = IDXMarketplaceCheck(m); emit MarketplaceSet(m);
   }
+  function setPeerAuction(address a) external onlyOwner {
+    peerAuction = IDXAuctionCheck(a); emit PeerAuctionSet(a);
+  }
+  function setMaxExtensions(uint8 value) external onlyOwner {
+    maxExtensions = value;
+    emit MaxExtensionsSet(value);
+  }
+  function setAuctionDurationBounds(uint256 minDuration, uint256 maxDuration) external onlyOwner {
+    if (
+      minDuration < MIN_DURATION_LIMIT ||
+      maxDuration > MAX_DURATION_LIMIT ||
+      minDuration > maxDuration
+    ) revert BadDurationBounds();
+    minAuctionDuration = minDuration;
+    maxAuctionDuration = maxDuration;
+    emit AuctionDurationBoundsSet(minDuration, maxDuration);
+  }
   function setAuctionParams(uint256 _minIncrementBps, uint256 _extendWindow, uint256 _extendBy)
     external onlyOwner
   {
     if (_minIncrementBps == 0) revert ZeroMinIncrement();
+    if (_extendBy <= _extendWindow) revert BadExtension();
     minIncrementBps = _minIncrementBps;
     extendWindow = _extendWindow;
     extendBy = _extendBy;
@@ -198,7 +242,7 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
   ) external {
     if (!allowedPayToken[payToken]) revert UnsupportedPayToken(payToken);
     if (reservePrice == 0) revert ZeroReserve();
-    if (duration == 0) revert BadDuration();
+    if (duration < minAuctionDuration || duration > maxAuctionDuration) revert BadDuration();
     if (registrar.ownerOf(tokenId) != msg.sender) revert NotTokenOwner(tokenId, msg.sender);
     if (registrar.getApproved(tokenId) != address(this) &&
         !registrar.isApprovedForAll(msg.sender, address(this)))
@@ -213,11 +257,14 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
         if (listed) revert ListedElsewhere(tokenId);
       } catch { /* marketplace down → skip the check, don't block auctions */ }
     }
+    if (address(peerAuction) != address(0) && peerAuction.isOnAuction(tokenId)) {
+      revert AuctionedElsewhere(tokenId);
+    }
 
     auctions[tokenId] = Auction({
       seller: msg.sender, tokenId: tokenId, payToken: payToken,
       reservePrice: reservePrice, endTime: block.timestamp + duration,
-      highestBidder: address(0), highestBid: 0, settled: false
+      highestBidder: address(0), highestBid: 0, extensionCount: 0, settled: false
     });
     emit AuctionCreated(tokenId, msg.sender, payToken, reservePrice, block.timestamp + duration);
     _notifyMetadataUpdate(tokenId);
@@ -232,10 +279,19 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
     Auction storage a = auctions[tokenId];
     if (a.seller == address(0) || a.settled) revert AuctionNotFound(tokenId);
     if (block.timestamp >= a.endTime) revert AuctionEnded(tokenId);
+    // Reject bids once the seller no longer holds the NFT — otherwise the bidder
+    // would escrow funds into an auction that can only end in a refund at settle.
+    //   판매자가 NFT를 더는 보유하지 않으면 입찰 거부 — 아니면 settle에서 환불로만
+    //   끝날 경매에 자금을 에스크로하게 된다.
+    if (registrar.ownerOf(tokenId) != a.seller) revert SellerNoLongerOwns(tokenId);
 
+    // Round the increment UP so a low-priced auction can never round it to 0
+    // (which would let an equal re-bid pass and break the min-increment rule).
+    //   증가분을 올림 → 저가 경매에서 0으로 반올림돼 같은 금액 재입찰이 통과,
+    //   최소 증가율이 깨지는 일을 방지.
     uint256 minRequired = a.highestBid == 0
       ? a.reservePrice
-      : a.highestBid + (a.highestBid * minIncrementBps) / 10000;
+      : a.highestBid + (a.highestBid * minIncrementBps + 9999) / 10000;
     if (amount < minRequired) revert BidTooLow(amount, minRequired);
 
     // Pull the new bid into escrow first.
@@ -254,8 +310,12 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
     // Anti-snipe: extend if inside the closing window.
     //   Anti-snipe: 마감 임박이면 연장.
     if (a.endTime - block.timestamp <= extendWindow) {
-      a.endTime = block.timestamp + extendBy;
-      emit AuctionExtended(tokenId, a.endTime);
+      uint256 newEndTime = block.timestamp + extendBy;
+      if (newEndTime > a.endTime && a.extensionCount < maxExtensions) {
+        a.endTime = newEndTime;
+        a.extensionCount += 1;
+        emit AuctionExtended(tokenId, newEndTime);
+      }
     }
     emit BidPlaced(tokenId, msg.sender, amount);
   }
@@ -306,7 +366,18 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
     //   에스크로 자금을 가둔다. 대신 경매를 정상 종료: 낙찰자에게 Pull 환불
     //   적립(본인이 withdraw)하고 이전은 생략한다.
     try registrar.ownerOf(tokenId) returns (address currentOwner) {
-      if (currentOwner != a.seller) {
+      // Ownership AND approval must both still hold. The seller may keep the NFT
+      // but revoke approval (directly, or by approving another market / clearing
+      // setApprovalForAll). Without this approval re-check the transfer below
+      // would revert, rolling back the refund credit and trapping the winner's
+      // escrow. Checked in-tx, so a pass here guarantees the transfer succeeds.
+      //   소유권 AND 권한이 모두 살아 있어야 한다. 판매자가 NFT는 두고 권한만
+      //   회수(직접/다른 마켓 approve/ForAll 해제)할 수 있다. 이 권한 재확인이
+      //   없으면 아래 전송이 revert돼 환불 적립을 롤백하고 낙찰자 에스크로를
+      //   가둔다. 같은 tx에서 검사하므로 통과 시 전송 성공이 보장된다.
+      bool approved = registrar.getApproved(tokenId) == address(this) ||
+                      registrar.isApprovedForAll(a.seller, address(this));
+      if (currentOwner != a.seller || !approved) {
         pendingReturns[a.payToken][a.highestBidder] += a.highestBid;
         emit AuctionSettledNoTransfer(tokenId, a.highestBidder, a.highestBid);
         _notifyMetadataUpdate(tokenId);

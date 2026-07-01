@@ -61,6 +61,10 @@ interface IDXMarketplaceCheck2 {
   function isListed(uint256 tokenId) external view returns (bool);
 }
 
+interface IDXAuctionCheck2 {
+  function isOnAuction(uint256 tokenId) external view returns (bool);
+}
+
 /// @title  DXDutchAuction
 /// @notice Linear declining-price auction for `.dex` 2LD names, paid in a
 ///         whitelisted stablecoin. First buyer at the current price wins;
@@ -74,8 +78,13 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
   address public feeRecipient;
   uint256 public protocolFeeBps;
   uint256 public constant MAX_FEE_BPS = 1000; // 10%
+  uint256 public constant MIN_DURATION_LIMIT = 1 days;
+  uint256 public constant MAX_DURATION_LIMIT = 30 days;
+  uint256 public minAuctionDuration = MIN_DURATION_LIMIT;
+  uint256 public maxAuctionDuration = MAX_DURATION_LIMIT;
 
   IDXMarketplaceCheck2 public marketplace; // mutual-exclusion check (optional)
+  IDXAuctionCheck2 public peerAuction;     // English/Dutch mutual-exclusion check (optional)
   mapping(address => bool) public allowedPayToken;
 
   // ── Auction state ─────────────────────────────────────────────────────────
@@ -86,6 +95,7 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
     uint256 startPrice;      // 시작가(높음)
     uint256 floorPrice;      // 바닥가(최저, 이 아래로 안 내려감)
     uint256 startTime;       // 시작 시각
+    uint256 endTime;         // 종료 시각
     uint256 stepInterval;    // 한 계단의 길이(초). 예: 5시간 = 18000
     uint256 dropPerStep;     // 계단당 하락액(절대 정수). 비율/정액 모두 이 값으로 환산
     bool    settled;         // 판매 완료/취소
@@ -99,10 +109,12 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
   event ProtocolFeeSet(uint256 bps);
   event PayTokenSet(address indexed token, bool allowed);
   event MarketplaceSet(address indexed marketplace);
+  event PeerAuctionSet(address indexed auction);
+  event AuctionDurationBoundsSet(uint256 minDuration, uint256 maxDuration);
 
   event DutchAuctionCreated(
     uint256 indexed tokenId, address indexed seller, address indexed payToken,
-    uint256 startPrice, uint256 floorPrice, uint256 startTime,
+    uint256 startPrice, uint256 floorPrice, uint256 startTime, uint256 endTime,
     uint256 stepInterval, uint256 dropPerStep
   );
   event DutchAuctionSold(
@@ -116,12 +128,16 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
   error UnsupportedPayToken(address token);
   error BadPrices();        // floor >= start, or zero
   error BadStep();          // stepInterval zero, or both/neither drop modes set
+  error BadDuration();
+  error BadDurationBounds();
   error IndivisibleDrop();  // 비율 적용 시 나머지 발생 — 깔끔한 정수 안 됨
   error NotTokenOwner(uint256 tokenId, address caller);
   error AuctionNotApproved(uint256 tokenId);
   error AlreadyAuctioned(uint256 tokenId);
   error ListedElsewhere(uint256 tokenId);
+  error AuctionedElsewhere(uint256 tokenId);
   error AuctionNotFound(uint256 tokenId);
+  error AuctionEnded(uint256 tokenId);
   error AlreadySettled(uint256 tokenId);
   error SellerNoLongerOwns(uint256 tokenId);
   error NotSeller(uint256 tokenId, address caller);
@@ -150,6 +166,19 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
   function setMarketplace(address m) external onlyOwner {
     marketplace = IDXMarketplaceCheck2(m); emit MarketplaceSet(m);
   }
+  function setPeerAuction(address a) external onlyOwner {
+    peerAuction = IDXAuctionCheck2(a); emit PeerAuctionSet(a);
+  }
+  function setAuctionDurationBounds(uint256 minDuration, uint256 maxDuration) external onlyOwner {
+    if (
+      minDuration < MIN_DURATION_LIMIT ||
+      maxDuration > MAX_DURATION_LIMIT ||
+      minDuration > maxDuration
+    ) revert BadDurationBounds();
+    minAuctionDuration = minDuration;
+    maxAuctionDuration = maxDuration;
+    emit AuctionDurationBoundsSet(minDuration, maxDuration);
+  }
 
   // ── Create ──────────────────────────────────────────────────────────────
   /// @notice Open a step Dutch auction. The price holds for `stepInterval`
@@ -175,16 +204,18 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
   ///
   /// @param startPrice      시작가 (payToken 최소단위, 정수)
   /// @param floorPrice      바닥가 (이 아래로 안 내려감)
+  /// @param duration        판매 가능 기간(초). 만료 후 구매 불가, active 아님
   /// @param stepInterval    한 계단의 길이(초). 예: 5시간 = 18000
   /// @param stepDropBps     비율 모드: 시작가 대비 만분율 (예: 500 = 5%). 정액이면 0
   /// @param stepDropAmount  정액 모드: 계단당 하락액(정수). 비율이면 0
   function createAuction(
     uint256 tokenId, address payToken,
-    uint256 startPrice, uint256 floorPrice, uint256 stepInterval,
+    uint256 startPrice, uint256 floorPrice, uint256 duration, uint256 stepInterval,
     uint256 stepDropBps, uint256 stepDropAmount
   ) external {
     if (!allowedPayToken[payToken]) revert UnsupportedPayToken(payToken);
     if (floorPrice == 0 || startPrice <= floorPrice) revert BadPrices();
+    if (duration < minAuctionDuration || duration > maxAuctionDuration) revert BadDuration();
     if (stepInterval == 0) revert BadStep();
 
     // Exactly one of (bps, amount) must be non-zero.
@@ -208,7 +239,7 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
     if (registrar.getApproved(tokenId) != address(this) &&
         !registrar.isApprovedForAll(msg.sender, address(this)))
       revert AuctionNotApproved(tokenId);
-    if (auctions[tokenId].seller != address(0) && !auctions[tokenId].settled)
+    if (_isActive(auctions[tokenId]))
       revert AlreadyAuctioned(tokenId);
 
     if (address(marketplace) != address(0)) {
@@ -216,16 +247,21 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
         if (listed) revert ListedElsewhere(tokenId);
       } catch { /* marketplace down → skip check */ }
     }
+    if (address(peerAuction) != address(0) && peerAuction.isOnAuction(tokenId)) {
+      revert AuctionedElsewhere(tokenId);
+    }
 
+    uint256 startTime = block.timestamp;
+    uint256 endTime = startTime + duration;
     auctions[tokenId] = Auction({
       seller: msg.sender, tokenId: tokenId, payToken: payToken,
       startPrice: startPrice, floorPrice: floorPrice,
-      startTime: block.timestamp, stepInterval: stepInterval,
+      startTime: startTime, endTime: endTime, stepInterval: stepInterval,
       dropPerStep: dropPerStep, settled: false
     });
     emit DutchAuctionCreated(
       tokenId, msg.sender, payToken, startPrice, floorPrice,
-      block.timestamp, stepInterval, dropPerStep
+      startTime, endTime, stepInterval, dropPerStep
     );
     _notifyMetadataUpdate(tokenId);
   }
@@ -268,6 +304,7 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
     Auction storage a = auctions[tokenId];
     if (a.seller == address(0)) revert AuctionNotFound(tokenId);
     if (a.settled) revert AlreadySettled(tokenId);
+    if (block.timestamp >= a.endTime) revert AuctionEnded(tokenId);
 
     uint256 price = currentPrice(tokenId);
     if (price > maxPrice) revert BadPrices(); // slippage guard
@@ -310,7 +347,7 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
   ///         상호 배타 검사에 사용.
   function isOnAuction(uint256 tokenId) external view returns (bool) {
     Auction memory a = auctions[tokenId];
-    if (a.seller == address(0) || a.settled) return false;
+    if (!_isActive(a)) return false;
     try registrar.ownerOf(tokenId) returns (address o) {
       return o == a.seller;
     } catch { return false; }
@@ -319,12 +356,16 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
   function getAuction(uint256 tokenId)
     external view
     returns (address seller, address payToken, uint256 startPrice,
-             uint256 floorPrice, uint256 startTime, uint256 stepInterval,
+             uint256 floorPrice, uint256 startTime, uint256 endTime, uint256 stepInterval,
              uint256 dropPerStep, bool settled)
   {
     Auction memory a = auctions[tokenId];
     return (a.seller, a.payToken, a.startPrice, a.floorPrice,
-            a.startTime, a.stepInterval, a.dropPerStep, a.settled);
+            a.startTime, a.endTime, a.stepInterval, a.dropPerStep, a.settled);
+  }
+
+  function _isActive(Auction memory a) internal view returns (bool) {
+    return a.seller != address(0) && !a.settled && block.timestamp < a.endTime;
   }
 
   function _notifyMetadataUpdate(uint256 tokenId) internal {

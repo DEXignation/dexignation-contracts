@@ -57,6 +57,7 @@ describe("Staking discount (A2)", function () {
     const staking = await viem.deployContract("DXNStaking", [
       stakeToken.address,
       owner.account.address,
+      owner.account.address,
     ]);
 
     return {

@@ -60,11 +60,28 @@ contract DXNStaking is Ownable, ReentrancyGuard {
   ///         무한 증가 시 OOG로 컨트랙트가 멈출 수 있어 제한.
   uint256 public constant MAX_REWARD_ASSETS = 16;
 
+  /// @notice Default minimum total stake required before rewards are
+  ///         distributed to stakers. With 18-decimal DXN this is 3,000 DXN.
+  ///         보상 분배가 시작되기 위한 기본 전체 스테이킹 하한.
+  uint256 public constant DEFAULT_MIN_TOTAL_STAKE_FOR_REWARDS = 3000 * 10 ** 18;
+
   IERC20 public immutable stakingToken; // DXN
 
   /// @notice Total amount of DXN currently staked.
   ///         현재 스테이킹된 DXN 총량.
   uint256 public totalStaked;
+
+  /// @notice Minimum `totalStaked` required for incoming rewards to be
+  ///         distributed. Rewards received below this threshold are sent to
+  ///         `treasury` instead of being carried over for future stakers.
+  ///         보상 분배에 필요한 최소 전체 스테이킹 수량. 기준 미달 시 보상은
+  ///         미래 staker에게 이월하지 않고 treasury로 전송.
+  uint256 public minTotalStakeForRewards;
+
+  /// @notice Destination for rewards received while `totalStaked` is below
+  ///         `minTotalStakeForRewards`.
+  ///         전체 스테이킹이 기준 미달일 때 보상을 받을 treasury 주소.
+  address public treasury;
 
   /// @dev staker => amount staked
   mapping(address => uint256) public stakedOf;
@@ -100,6 +117,16 @@ contract DXNStaking is Ownable, ReentrancyGuard {
     uint256 amount
   );
   event NotifierSet(address indexed notifier, bool allowed);
+  event TreasurySet(address indexed oldTreasury, address indexed newTreasury);
+  event MinTotalStakeForRewardsSet(
+    uint256 oldMinTotalStakeForRewards,
+    uint256 newMinTotalStakeForRewards
+  );
+  event RewardRedirectedToTreasury(
+    address indexed token,
+    address indexed treasury,
+    uint256 amount
+  );
 
   // ── Errors ──────────────────────────────────────────────────────────────────
 
@@ -111,9 +138,17 @@ contract DXNStaking is Ownable, ReentrancyGuard {
   error TooManyRewardAssets();
   error ZeroAddress();
 
-  constructor(IERC20 _stakingToken, address _owner) Ownable(_owner) {
+  constructor(
+    IERC20 _stakingToken,
+    address _treasury,
+    address _owner
+  ) Ownable(_owner) {
     if (address(_stakingToken) == address(0)) revert ZeroAddress();
+    if (_owner == address(0)) revert ZeroAddress();
+    if (_treasury == address(0)) revert ZeroAddress();
     stakingToken = _stakingToken;
+    treasury = _treasury;
+    minTotalStakeForRewards = DEFAULT_MIN_TOTAL_STAKE_FOR_REWARDS;
   }
 
   // ── Owner config ────────────────────────────────────────────────────────────
@@ -136,6 +171,24 @@ contract DXNStaking is Ownable, ReentrancyGuard {
   function setNotifier(address notifier, bool allowed) external onlyOwner {
     notifiers[notifier] = allowed;
     emit NotifierSet(notifier, allowed);
+  }
+
+  function setTreasury(address newTreasury) external onlyOwner {
+    if (newTreasury == address(0)) revert ZeroAddress();
+    address oldTreasury = treasury;
+    treasury = newTreasury;
+    emit TreasurySet(oldTreasury, newTreasury);
+  }
+
+  function setMinTotalStakeForRewards(uint256 newMinTotalStakeForRewards)
+    external onlyOwner
+  {
+    uint256 oldMinTotalStakeForRewards = minTotalStakeForRewards;
+    minTotalStakeForRewards = newMinTotalStakeForRewards;
+    emit MinTotalStakeForRewardsSet(
+      oldMinTotalStakeForRewards,
+      newMinTotalStakeForRewards
+    );
   }
 
   // ── Staker actions ──────────────────────────────────────────────────────────
@@ -224,7 +277,7 @@ contract DXNStaking is Ownable, ReentrancyGuard {
   ///         실측하므로 notifier가 부풀리거나 과소 보고할 수 없음.
   ///         `amount` 인자는 hint로 받되 실제로는 min(amount, deltaBalance)
   ///         를 사용.
-  function notifyReward(address rewardToken, uint256 amount) external {
+  function notifyReward(address rewardToken, uint256 amount) external nonReentrant {
     if (!notifiers[msg.sender]) revert NotNotifier();
     if (!isRewardAsset[rewardToken]) revert UnknownRewardAsset(rewardToken);
 
@@ -246,36 +299,21 @@ contract DXNStaking is Ownable, ReentrancyGuard {
     uint256 reward = amount < available ? amount : available;
     if (reward == 0) return;
 
-    // If no one is staked, reward is left in the contract for future
-    // stakers. We update the "accounted" tracker accordingly so the next
-    // notify doesn't double-count it.
+    // If the pool is too small, do not carry rewards forward for the first
+    // qualifying staker to capture. Send them to treasury instead.
     //
-    // staker가 0이면 보상은 컨트랙트에 남겨두고 미래 staker에게 적용.
-    // 다음 notify가 중복 계산하지 않도록 accounted를 갱신.
-    if (totalStaked == 0) {
-      _carriedOver[rewardToken] += reward;
-      emit RewardNotified(rewardToken, reward);
+    // 풀이 너무 작으면 첫 기준 충족 staker가 과거 보상을 가져가지 못하도록
+    // 이월하지 않고 treasury로 전송.
+    if (totalStaked < minTotalStakeForRewards) {
+      IERC20(rewardToken).safeTransfer(treasury, reward);
+      emit RewardRedirectedToTreasury(rewardToken, treasury, reward);
       return;
-    }
-
-    // Include any previously carried-over rewards now that there's stake.
-    //   stake가 생긴 시점에 이전에 carry-over된 보상도 함께 분배.
-    uint256 carried = _carriedOver[rewardToken];
-    if (carried > 0) {
-      reward += carried;
-      _carriedOver[rewardToken] = 0;
     }
 
     accRewardPerShare[rewardToken] += (reward * ACC_PRECISION) / totalStaked;
     _totalDistributed[rewardToken] += reward;
     emit RewardNotified(rewardToken, reward);
   }
-
-  /// @dev Tracks rewards arrived while totalStaked was 0; counted in
-  ///      the next non-zero notify.
-  ///      totalStaked가 0일 때 도착한 보상 추적. 다음 0이 아닌 notify에
-  ///      포함됨.
-  mapping(address => uint256) private _carriedOver;
 
   /// @dev Total rewards ever distributed via notifyReward, per asset.
   ///      Used to compute "accounted balance" without per-staker iteration.
@@ -290,15 +328,15 @@ contract DXNStaking is Ownable, ReentrancyGuard {
   mapping(address => uint256) private _totalClaimed;
 
   /// @dev How much of the contract's `rewardToken` balance is reserved
-  ///      either for unclaimed rewards or as carried-over future rewards.
+  ///      for unclaimed rewards.
   ///      The notifier's "available" pool is `balance - this`.
-  ///      컨트랙트가 보유한 `rewardToken` 잔액 중 미지급 보상 + carry-over
-  ///      예약분. notifier가 보는 "available"은 `balance - 이 값`.
+  ///      컨트랙트가 보유한 `rewardToken` 잔액 중 미지급 보상 예약분.
+  ///      notifier가 보는 "available"은 `balance - 이 값`.
   function _accountedBalance(address rewardToken) internal view returns (uint256) {
     uint256 unclaimed = _totalDistributed[rewardToken] > _totalClaimed[rewardToken]
       ? _totalDistributed[rewardToken] - _totalClaimed[rewardToken]
       : 0;
-    uint256 accounted = unclaimed + _carriedOver[rewardToken];
+    uint256 accounted = unclaimed;
 
     // Edge case: if reward asset == staking asset, the user-staked amount
     // also sits in this contract's balance and must be excluded.

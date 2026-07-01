@@ -172,6 +172,110 @@ describe("DXSubnameRegistrar — sale-lock commerce", function () {
     );
   });
 
+  it("blocks setSubnodeOwner from bypassing a live sold subname lock", async function () {
+    const d = await deploy();
+    const parentNode = await registerParent(d, d.alice, "aliceownerlock");
+    const price = 10n ** 18n;
+    await enableSalesAndDelegate(d, parentNode, d.alice, price);
+
+    await d.subnameRegistrar.write.registerSubname([parentNode, "team"], {
+      account: d.bob.account,
+      value: price,
+    });
+
+    const subnode = subnodeFor(parentNode, "team");
+    await expectRevert(
+      d.registry.write.setSubnodeOwner(
+        [parentNode, labelHash("team"), d.carol.account.address],
+        { account: d.alice.account },
+      ),
+      "SubnodeSaleLocked",
+    );
+    expect((await d.registry.read.owner([subnode])).toLowerCase())
+      .to.equal(d.bob.account.address.toLowerCase());
+  });
+
+  it("blocks setSubnodeRecord from bypassing a live sold subname lock", async function () {
+    const d = await deploy();
+    const parentNode = await registerParent(d, d.alice, "alicerecordlock");
+    const price = 10n ** 18n;
+    await enableSalesAndDelegate(d, parentNode, d.alice, price);
+
+    await d.subnameRegistrar.write.registerSubname([parentNode, "team"], {
+      account: d.bob.account,
+      value: price,
+    });
+
+    const subnode = subnodeFor(parentNode, "team");
+    await expectRevert(
+      d.registry.write.setSubnodeRecord(
+        [parentNode, labelHash("team"), d.carol.account.address, d.resolver.address],
+        { account: d.alice.account },
+      ),
+      "SubnodeSaleLocked",
+    );
+    expect((await d.registry.read.owner([subnode])).toLowerCase())
+      .to.equal(d.bob.account.address.toLowerCase());
+  });
+
+  it("clears a stale sale lock when reassigning an expired sold subname", async function () {
+    const d = await deploy();
+    const parentNode = await registerParent(d, d.alice, "aliceexpiredreassign");
+    const price = 10n ** 18n;
+    await enableSalesAndDelegate(d, parentNode, d.alice, price);
+
+    await d.subnameRegistrar.write.registerSubname([parentNode, "team"], {
+      account: d.bob.account,
+      value: price,
+    });
+
+    const subnode = subnodeFor(parentNode, "team");
+    expect(await d.registry.read.subnodeSaleLocked([subnode])).to.equal(true);
+
+    await d.registry.write.setSubnodeExpires([parentNode, labelHash("team"), 1n], {
+      account: d.alice.account,
+    });
+    expect(await d.registry.read.isExpired([subnode])).to.equal(true);
+
+    await d.registry.write.reassignSubnodeRecord(
+      [parentNode, "team", d.carol.account.address, d.resolver.address],
+      { account: d.alice.account },
+    );
+
+    expect((await d.registry.read.owner([subnode])).toLowerCase())
+      .to.equal(d.carol.account.address.toLowerCase());
+    expect(await d.registry.read.subnodeSaleLocked([subnode])).to.equal(false);
+  });
+
+  it("clears a stale sale lock when setSubnodeOwner overwrites an expired sold subname", async function () {
+    const d = await deploy();
+    const parentNode = await registerParent(d, d.alice, "aliceexpiredowner");
+    const price = 10n ** 18n;
+    await enableSalesAndDelegate(d, parentNode, d.alice, price);
+
+    await d.subnameRegistrar.write.registerSubname([parentNode, "team"], {
+      account: d.bob.account,
+      value: price,
+    });
+
+    const subnode = subnodeFor(parentNode, "team");
+    expect(await d.registry.read.subnodeSaleLocked([subnode])).to.equal(true);
+
+    await d.registry.write.setSubnodeExpires([parentNode, labelHash("team"), 1n], {
+      account: d.alice.account,
+    });
+    expect(await d.registry.read.isExpired([subnode])).to.equal(true);
+
+    await d.registry.write.setSubnodeOwner(
+      [parentNode, labelHash("team"), d.carol.account.address],
+      { account: d.alice.account },
+    );
+
+    expect((await d.registry.read.owner([subnode])).toLowerCase())
+      .to.equal(d.carol.account.address.toLowerCase());
+    expect(await d.registry.read.subnodeSaleLocked([subnode])).to.equal(false);
+  });
+
   it("marks a sold subname expired when the parent name expires", async function () {
     const d = await deploy();
     const parentNode = await registerParent(d, d.alice, "aliceexpiry");

@@ -209,6 +209,7 @@ contract DXRegistry is IDXRegistry {
     address _owner
   ) public override authorised(node) returns (bytes32) {
     bytes32 subnode = keccak256(abi.encodePacked(node, label));
+    _prepareSubnodeParentMutation(subnode);
     parentOf[subnode] = node;
     _setOwner(subnode, _owner);
     emit NewOwner(node, label, _owner);
@@ -279,6 +280,7 @@ contract DXRegistry is IDXRegistry {
     address _resolver
   ) external override authorised(node) {
     bytes32 subnode = keccak256(abi.encodePacked(node, label));
+    _prepareSubnodeParentMutation(subnode);
     parentOf[subnode] = node;
     _setOwner(subnode, _owner);
     emit NewOwner(node, label, _owner);
@@ -366,13 +368,7 @@ contract DXRegistry is IDXRegistry {
     address previousOwner = records[subnode].owner;
     if (previousOwner == address(0)) revert SubnodeNotFound(subnode);
 
-    // Buyer protection: a sold (sale-locked) subname cannot be reassigned by
-    // the parent while it is live. It becomes reassignable only after expiry.
-    //   구매자 보호: 판매(판매-잠금)된 서브네임은 라이브 동안 부모가 재지정
-    //   불가. 만료 후에만 재지정 가능.
-    if (subnodeSaleLocked[subnode] && !isExpired(subnode)) {
-      revert SubnodeSaleLocked(subnode);
-    }
+    _prepareSubnodeParentMutation(subnode);
 
     _setSubnodeRecord(node, subnode, labelHash, _owner, _resolver);
     _invalidate(subnode);
@@ -445,6 +441,14 @@ contract DXRegistry is IDXRegistry {
       records[subnode].resolver = _resolver;
       emit NewResolver(subnode, _resolver);
     }
+  }
+
+  function _prepareSubnodeParentMutation(bytes32 subnode) internal {
+    if (!subnodeSaleLocked[subnode]) return;
+    if (!isExpired(subnode)) {
+      revert SubnodeSaleLocked(subnode);
+    }
+    subnodeSaleLocked[subnode] = false;
   }
 
   function _validateSubnodeLabel(string calldata label) internal pure returns (bytes32) {

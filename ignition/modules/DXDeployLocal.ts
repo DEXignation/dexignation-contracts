@@ -77,7 +77,7 @@ export default buildModule("DXDeployLocal", (m) => {
   const reservations = m.contract("DXReservations", [owner]);
   const contributionSBT = m.contract("DXContributionSBT", [owner]);
   const dxnToken = m.contract("DXNToken", ["DEXignation Token", "DXN", DXN_CAP, owner]);
-  const dxnStaking = m.contract("DXNStaking", [dxnToken, owner]);
+  const dxnStaking = m.contract("DXNStaking", [dxnToken, m.getAccount(0), owner]);
   const revenueDistributor = m.contract(
     "RevenueDistributor",
     [

@@ -251,6 +251,53 @@ describe("DXRegistrarController — registration flow", function () {
     expect(await dxnToken.read.balanceOf([userAddr])).to.equal(8n * 10n ** 17n);
   });
 
+  it("stops minting DXN rewards after total supply reaches the configured share", async function () {
+    const { controller, resolver, dxnToken, user, owner, testClient } = await deploy();
+    const userAddr = user.account.address;
+    const limitBps = 101n;
+    const rewardLimit = (await dxnToken.read.cap()) * limitBps / 10000n;
+    const initialSupply = await dxnToken.read.totalSupply();
+    const remainingRewardSupply = rewardLimit - initialSupply;
+
+    expect(await controller.read.dxnRewardSupplyLimitBps()).to.equal(7000n);
+
+    await controller.write.setDxnRewardSupplyLimitBps([limitBps], { account: owner.account });
+    await controller.write.setDxnReward([
+      dxnToken.address,
+      10000n,
+      1n,
+    ], { account: owner.account });
+
+    for (const [label, byte] of [["capone", "88"], ["captwo", "99"]] as const) {
+      const secret = `0x${byte.repeat(32)}` as `0x${string}`;
+      const commitment = makeCommitmentFull(
+        label, userAddr, ONE_YEAR, resolver.address, ZERO_ADDR, secret,
+      );
+      await controller.write.commit([commitment], { account: user.account });
+      await testClient.increaseTime({ seconds: Number(MIN_COMMITMENT_AGE) + 5 });
+      await testClient.mine({ blocks: 1 });
+
+      const price = await controller.read.rentPrice([ONE_YEAR]);
+      await controller.write.register(
+        [label, userAddr, ONE_YEAR, resolver.address, secret],
+        { account: user.account, value: price },
+      );
+    }
+
+    expect(await dxnToken.read.totalSupply()).to.equal(rewardLimit);
+    expect(await dxnToken.read.balanceOf([userAddr])).to.equal(remainingRewardSupply);
+    expect(await controller.read.dxnRewardMinted()).to.equal(remainingRewardSupply);
+  });
+
+  it("rejects DXN reward supply limit ratios above 100%", async function () {
+    const { controller, owner } = await deploy();
+
+    await expectRevert(
+      controller.write.setDxnRewardSupplyLimitBps([10001n], { account: owner.account }),
+      "RewardSupplyLimitTooHigh",
+    );
+  });
+
   it("rejects reveal that is too early", async function () {
     const { controller, resolver, user } = await deploy();
     const label = "tooearly";

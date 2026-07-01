@@ -73,6 +73,8 @@ interface IStakingBalance {
 /// @dev Minimal DXN mint interface for purchase rewards.
 ///      구매 보상 DXN mint용 최소 인터페이스.
 interface IDXNRewardToken {
+  function cap() external view returns (uint256);
+  function totalSupply() external view returns (uint256);
   function mint(address to, uint256 amount) external;
 }
 
@@ -215,9 +217,29 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
   ///         `setDxnReward`로 owner가 변경 가능. 예: $2.00 = `2e18`.
   uint256 public dxnRewardPriceAttoUSD;
 
-    /// @notice Hard cap on the discount rate. 10000 bps = 100%.
+  /// @notice Hard cap on the discount rate. 10000 bps = 100%.
   ///         할인율 하드캡. 10000 bps = 100%.
   uint256 public constant MAX_DISCOUNT_BPS = 10000;
+
+  /// @notice Default maximum purchase-reward allocation. 7000 bps = 70%.
+  ///         기본 구매 보상 배정 비율. 7000 bps = 70%.
+  uint256 public constant DEFAULT_DXN_REWARD_SUPPLY_LIMIT_BPS = 7000;
+
+  /// @notice Hard cap on the DXN reward supply allocation. 10000 bps = 100%.
+  ///         DXN 보상 공급 배정 비율 하드캡. 10000 bps = 100%.
+  uint256 public constant MAX_DXN_REWARD_SUPPLY_LIMIT_BPS = 10000;
+
+  /// @notice Maximum share of the DXN token cap that can be minted as
+  ///         purchase rewards. Defaults to 70% and is owner-configurable.
+  ///         구매 보상으로 mint 가능한 DXN cap 비율. 기본 70%, owner 변경 가능.
+  uint256 public dxnRewardSupplyLimitBps = DEFAULT_DXN_REWARD_SUPPLY_LIMIT_BPS;
+
+  /// @notice Total DXN minted by this controller as purchase rewards.
+  ///         Limit checks use the token's totalSupply; this value is
+  ///         retained for purchase-reward accounting.
+  ///         이 컨트롤러가 구매 보상으로 mint한 DXN 누적량.
+  ///         한도 판정은 토큰 totalSupply 기준이며, 이 값은 구매 보상 회계용.
+  uint256 public dxnRewardMinted;
 
   /// @dev commitment hash => timestamp at which it was committed.
   ///      commitment 해시 => commit된 시각.
@@ -243,15 +265,28 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     uint256 rewardBps,
     uint256 rewardPriceAttoUSD
   );
+  event DxnRewardSupplyLimitConfigured(uint256 supplyLimitBps);
   event DxnRewardMinted(
     address indexed recipient,
     uint256 paidAttoUSD,
     uint256 rewardAmount
   );
+  event AllowedPaymentTokenUpdated(
+    address indexed token,
+    bool previousAllowed,
+    bool newAllowed
+  );
+  event CommitmentAgeSettingsUpdated(
+    uint256 previousMinAge,
+    uint256 previousMaxAge,
+    uint256 newMinAge,
+    uint256 newMaxAge
+  );
 
   error LabelReserved(string label);
   error DiscountRateTooHigh(uint256 requested, uint256 max);
   error RewardRateTooHigh(uint256 requested, uint256 max);
+  error RewardSupplyLimitTooHigh(uint256 requested, uint256 max);
   error RewardPriceIsZero();
   error RequiredHoldAmountIsZero();
 
@@ -373,6 +408,22 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     }
 
     emit DxnRewardConfigured(_dxnToken, dxnRewardBps, dxnRewardPriceAttoUSD);
+  }
+
+  /// @notice Configure the maximum DXN cap share used for purchase rewards.
+  ///         Owner-only. 7000 = 70%; 0 disables future purchase rewards.
+  ///         구매 보상에 사용할 DXN cap 최대 비율 설정. 오너 전용.
+  ///         7000 = 70%, 0이면 이후 구매 보상 비활성.
+  function setDxnRewardSupplyLimitBps(uint256 _supplyLimitBps) external onlyOwner {
+    if (_supplyLimitBps > MAX_DXN_REWARD_SUPPLY_LIMIT_BPS) {
+      revert RewardSupplyLimitTooHigh(
+        _supplyLimitBps,
+        MAX_DXN_REWARD_SUPPLY_LIMIT_BPS
+      );
+    }
+
+    dxnRewardSupplyLimitBps = _supplyLimitBps;
+    emit DxnRewardSupplyLimitConfigured(_supplyLimitBps);
   }
 
   /// @notice Compute the post-discount price for `user`. If the discount
@@ -790,10 +841,10 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     );
   }
 
-  /// @notice Commit the hash. Caller must wait `minCommitmentAge` before
-  ///         revealing via `register()` / `registerWithToken()`.
-  ///         commit. 호출자는 `register()` 호출 전에 `minCommitmentAge` 만큼
-  ///         대기해야 한다.
+  /// @notice Store a commitment hash. The same hash cannot be re-committed
+  ///         until its `maxCommitmentAge` window has fully expired.
+  ///         commitment hash 저장. 동일 hash는 `maxCommitmentAge` 윈도우가
+  ///         완전히 지난 뒤에만 다시 commit 할 수 있다.
   function commit(bytes32 commitment) public override {
     if (commitments[commitment] + maxCommitmentAge >= block.timestamp) {
       revert UnexpiredCommitmentExists(commitment);
@@ -843,7 +894,9 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     address token,
     bool allowed
   ) external override onlyOwner {
+    bool previousAllowed = allowedPaymentTokens[token];
     allowedPaymentTokens[token] = allowed;
+    emit AllowedPaymentTokenUpdated(token, previousAllowed, allowed);
   }
 
   /// @notice Configure the contribution-SBT discount. Holders of at least
@@ -922,8 +975,11 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     uint256 maxAge
   ) external override onlyOwner {
     if (minAge >= maxAge) revert MaxCommitmentAgeTooLow();
+    uint256 previousMinAge = minCommitmentAge;
+    uint256 previousMaxAge = maxCommitmentAge;
     minCommitmentAge = minAge;
     maxCommitmentAge = maxAge;
+    emit CommitmentAgeSettingsUpdated(previousMinAge, previousMaxAge, minAge, maxAge);
   }
 
   /// @notice Withdraw the entire native balance to the contract owner.
@@ -1034,9 +1090,19 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     IDXNRewardToken rewardToken = dxnRewardToken;
     uint256 rewardBps = dxnRewardBps;
     uint256 rewardPrice = dxnRewardPriceAttoUSD;
-    if (address(rewardToken) == address(0) || rewardBps == 0 || rewardPrice == 0) {
+    uint256 supplyLimitBps = dxnRewardSupplyLimitBps;
+    if (
+      address(rewardToken) == address(0) ||
+      rewardBps == 0 ||
+      rewardPrice == 0 ||
+      supplyLimitBps == 0
+    ) {
       return;
     }
+
+    uint256 rewardSupplyLimit = (rewardToken.cap() * supplyLimitBps) / 10000;
+    uint256 currentSupply = rewardToken.totalSupply();
+    if (currentSupply >= rewardSupplyLimit) return;
 
     uint256 paidAttoUSD = _applyDiscount(
       _priceWithPremiumAttoUSD(label, duration),
@@ -1049,6 +1115,12 @@ contract DXRegistrarController is IDXRegistrarController, Ownable, ReentrancyGua
     ) / (10000 * rewardPrice);
     if (rewardAmount == 0) return;
 
+    uint256 remainingRewardSupply = rewardSupplyLimit - currentSupply;
+    if (rewardAmount > remainingRewardSupply) {
+      rewardAmount = remainingRewardSupply;
+    }
+
+    dxnRewardMinted += rewardAmount;
     rewardToken.mint(payer, rewardAmount);
     emit DxnRewardMinted(payer, paidAttoUSD, rewardAmount);
   }

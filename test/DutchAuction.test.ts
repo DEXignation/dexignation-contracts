@@ -30,6 +30,7 @@ const FEE_BPS = 250n;
 const USDC = (n: bigint) => n * 10n ** 6n;
 const START = USDC(1_000_000n);   // 1,000,000 USDC
 const FLOOR = USDC(700_000n);     // floor 700,000
+const DUTCH_DUR = 7n * 24n * 60n * 60n;
 const STEP = 5n * 60n * 60n;      // 5 hours per step
 const DROP_BPS = 500n;            // 5% of start = 50,000 per step (divides evenly)
 const DROP_FIXED = USDC(40_000n); // 40,000 per step
@@ -88,7 +89,8 @@ describe("DXDutchAuction — step declining-price auction", function () {
     const tokenId = await registerName(d, seller, label);
     await registrar.write.approve([auction.address, tokenId], { account: seller.account });
     await auction.write.createAuction(
-      [tokenId, mockUsdc.address, START, FLOOR, STEP, DROP_BPS, 0n], { account: seller.account });
+      [tokenId, mockUsdc.address, START, FLOOR, DUTCH_DUR, STEP, DROP_BPS, 0n],
+      { account: seller.account });
     return tokenId;
   }
 
@@ -143,13 +145,40 @@ describe("DXDutchAuction — step declining-price auction", function () {
     expect(await registrar.read.supportsInterface([ERC4906_INTERFACE_ID])).to.equal(true);
     await registrar.write.approve([auction.address, tokenId], { account: alice.account });
     const createHash = await auction.write.createAuction(
-      [tokenId, mockUsdc.address, START, FLOOR, STEP, DROP_BPS, 0n],
+      [tokenId, mockUsdc.address, START, FLOOR, DUTCH_DUR, STEP, DROP_BPS, 0n],
       { account: alice.account },
     );
     await expectMetadataUpdate(d, createHash, tokenId);
 
     const cancelHash = await auction.write.cancelAuction([tokenId], { account: alice.account });
     await expectMetadataUpdate(d, cancelHash, tokenId);
+  });
+
+  it("rejects createAuction while the token is on an English auction", async function () {
+    const d = await deploy();
+    const english = await d.viem.deployContract("DXEnglishAuction", [
+      d.registrar.address, d.owner.account.address, FEE_BPS,
+      500n, 600n, 1200n,
+      d.owner.account.address,
+    ]);
+    await english.write.setPayToken([d.mockUsdc.address, true], { account: d.owner.account });
+    await d.auction.write.setPeerAuction([english.address], { account: d.owner.account });
+
+    const tokenId = await registerName(d, d.alice, "dual-english-first");
+    await d.registrar.write.approve([english.address, tokenId], { account: d.alice.account });
+    await english.write.createAuction(
+      [tokenId, d.mockUsdc.address, USDC(100n), 24n * 60n * 60n],
+      { account: d.alice.account },
+    );
+
+    await d.registrar.write.approve([d.auction.address, tokenId], { account: d.alice.account });
+    await expectRevert(
+      d.auction.write.createAuction(
+        [tokenId, d.mockUsdc.address, START, FLOOR, DUTCH_DUR, STEP, DROP_BPS, 0n],
+        { account: d.alice.account },
+      ),
+      "AuctionedElsewhere",
+    );
   });
 
   it("keeps auction actions working if registrar metadata notification wiring is cleared", async function () {
@@ -161,7 +190,7 @@ describe("DXDutchAuction — step declining-price auction", function () {
     await registrar.write.setAuctions([ZERO, ZERO], { account: owner.account });
 
     await auction.write.createAuction(
-      [tokenId, mockUsdc.address, START, FLOOR, STEP, DROP_BPS, 0n],
+      [tokenId, mockUsdc.address, START, FLOOR, DUTCH_DUR, STEP, DROP_BPS, 0n],
       { account: alice.account },
     );
     expect(await auction.read.isOnAuction([tokenId])).to.equal(true);
@@ -193,8 +222,8 @@ describe("DXDutchAuction — step declining-price auction", function () {
     const d = await deploy();
     const { auction, testClient } = d;
     const tokenId = await startRate(d, d.alice, "roy");
-    // jump way past the floor (e.g. 100 steps)
-    await testClient.increaseTime(stepSeconds(100)); await testClient.mine({ blocks: 1 });
+    // jump past the floor while the auction is still within its duration
+    await testClient.increaseTime(stepSeconds(7)); await testClient.mine({ blocks: 1 });
     expect(await auction.read.currentPrice([tokenId])).to.equal(FLOOR); // 700,000, not lower
   });
 
@@ -204,7 +233,7 @@ describe("DXDutchAuction — step declining-price auction", function () {
     const tokenId = await registerName(d, alice, "roy");
     await registrar.write.approve([auction.address, tokenId], { account: alice.account });
     await auction.write.createAuction(
-      [tokenId, mockUsdc.address, START, FLOOR, STEP, 0n, DROP_FIXED], { account: alice.account });
+      [tokenId, mockUsdc.address, START, FLOOR, DUTCH_DUR, STEP, 0n, DROP_FIXED], { account: alice.account });
     expect(await auction.read.currentPrice([tokenId])).to.equal(START);
     await testClient.increaseTime(stepSeconds(1)); await testClient.mine({ blocks: 1 });
     expect(await auction.read.currentPrice([tokenId])).to.equal(USDC(960_000n)); // -40,000
@@ -220,11 +249,11 @@ describe("DXDutchAuction — step declining-price auction", function () {
     await registrar.write.approve([auction.address, tokenId], { account: alice.account });
     // floor=0 hits BadPrices first (validated before the drop math)
     await expectRevert(
-      auction.write.createAuction([tokenId, mockUsdc.address, 100n, 0n, STEP, 1n, 0n],
+      auction.write.createAuction([tokenId, mockUsdc.address, 100n, 0n, DUTCH_DUR, STEP, 1n, 0n],
         { account: alice.account }), "BadPrices");
     // start=15001, bps=1 → 15001*1 = 15001; 15001 % 10000 = 5001 ≠ 0 → IndivisibleDrop
     await expectRevert(
-      auction.write.createAuction([tokenId, mockUsdc.address, 15001n, 1n, STEP, 1n, 0n],
+      auction.write.createAuction([tokenId, mockUsdc.address, 15001n, 1n, DUTCH_DUR, STEP, 1n, 0n],
         { account: alice.account }), "IndivisibleDrop");
   });
 
@@ -234,10 +263,10 @@ describe("DXDutchAuction — step declining-price auction", function () {
     const tokenId = await registerName(d, alice, "roy");
     await registrar.write.approve([auction.address, tokenId], { account: alice.account });
     await expectRevert(  // both set
-      auction.write.createAuction([tokenId, mockUsdc.address, START, FLOOR, STEP, DROP_BPS, DROP_FIXED],
+      auction.write.createAuction([tokenId, mockUsdc.address, START, FLOOR, DUTCH_DUR, STEP, DROP_BPS, DROP_FIXED],
         { account: alice.account }), "BadStep");
     await expectRevert(  // neither set
-      auction.write.createAuction([tokenId, mockUsdc.address, START, FLOOR, STEP, 0n, 0n],
+      auction.write.createAuction([tokenId, mockUsdc.address, START, FLOOR, DUTCH_DUR, STEP, 0n, 0n],
         { account: alice.account }), "BadStep");
   });
 
@@ -282,16 +311,39 @@ describe("DXDutchAuction — step declining-price auction", function () {
       auction.write.buy([tokenId, USDC(900_000n)], { account: bob.account }), "BadPrices");
   });
 
-  it("can still buy at the floor after the schedule elapses", async function () {
+  it("can still buy at the floor before the auction expires", async function () {
     const d = await deploy();
     const { auction, registrar, bob, testClient } = d;
     const tokenId = await startRate(d, d.alice, "roy");
     await fund(d, bob);
-    await testClient.increaseTime(stepSeconds(100)); await testClient.mine({ blocks: 1 });
+    await testClient.increaseTime(stepSeconds(7)); await testClient.mine({ blocks: 1 });
     expect(await auction.read.currentPrice([tokenId])).to.equal(FLOOR);
     await auction.write.buy([tokenId, FLOOR], { account: bob.account });
     expect((await registrar.read.ownerOf([tokenId])).toLowerCase())
       .to.equal(bob.account.address.toLowerCase());
+  });
+
+  it("treats expired auctions as inactive, blocks buy, and allows a new auction", async function () {
+    const d = await deploy();
+    const { auction, registrar, mockUsdc, alice, bob, testClient } = d;
+    const tokenId = await startRate(d, alice, "expiring-dutch");
+
+    await fund(d, bob);
+    await testClient.increaseTime({ seconds: Number(DUTCH_DUR) + 1 });
+    await testClient.mine({ blocks: 1 });
+
+    expect(await auction.read.isOnAuction([tokenId])).to.equal(false);
+    await expectRevert(
+      auction.write.buy([tokenId, FLOOR], { account: bob.account }),
+      "AuctionEnded",
+    );
+
+    await registrar.write.approve([auction.address, tokenId], { account: alice.account });
+    await auction.write.createAuction(
+      [tokenId, mockUsdc.address, START, FLOOR, DUTCH_DUR, STEP, DROP_BPS, 0n],
+      { account: alice.account },
+    );
+    expect(await auction.read.isOnAuction([tokenId])).to.equal(true);
   });
 
   // ── guards ──────────────────────────────────────────────────────────────────
@@ -301,8 +353,62 @@ describe("DXDutchAuction — step declining-price auction", function () {
     const tokenId = await registerName(d, alice, "roy");
     await registrar.write.approve([auction.address, tokenId], { account: alice.account });
     await expectRevert(
-      auction.write.createAuction([tokenId, mockUsdc.address, FLOOR, START, STEP, DROP_BPS, 0n],
+      auction.write.createAuction([tokenId, mockUsdc.address, FLOOR, START, DUTCH_DUR, STEP, DROP_BPS, 0n],
         { account: alice.account }), "BadPrices");
+  });
+
+  it("enforces owner-configured duration bounds within the 1-30 day hard limits", async function () {
+    const d = await deploy();
+    const { auction, registrar, mockUsdc, alice, owner } = d;
+    const tokenId = await registerName(d, alice, "duration-guard");
+    await registrar.write.approve([auction.address, tokenId], { account: alice.account });
+
+    expect(await auction.read.MIN_DURATION_LIMIT()).to.equal(24n * 60n * 60n);
+    expect(await auction.read.MAX_DURATION_LIMIT()).to.equal(30n * 24n * 60n * 60n);
+
+    await expectRevert(
+      auction.write.createAuction(
+        [tokenId, mockUsdc.address, START, FLOOR, 24n * 60n * 60n - 1n, STEP, DROP_BPS, 0n],
+        { account: alice.account },
+      ),
+      "BadDuration",
+    );
+
+    await expectRevert(
+      auction.write.setAuctionDurationBounds(
+        [24n * 60n * 60n - 1n, 30n * 24n * 60n * 60n],
+        { account: owner.account },
+      ),
+      "BadDurationBounds",
+    );
+    await expectRevert(
+      auction.write.setAuctionDurationBounds(
+        [24n * 60n * 60n, 30n * 24n * 60n * 60n + 1n],
+        { account: owner.account },
+      ),
+      "BadDurationBounds",
+    );
+
+    await auction.write.setAuctionDurationBounds(
+      [2n * 24n * 60n * 60n, 10n * 24n * 60n * 60n],
+      { account: owner.account },
+    );
+    expect(await auction.read.minAuctionDuration()).to.equal(2n * 24n * 60n * 60n);
+    expect(await auction.read.maxAuctionDuration()).to.equal(10n * 24n * 60n * 60n);
+
+    await expectRevert(
+      auction.write.createAuction(
+        [tokenId, mockUsdc.address, START, FLOOR, 24n * 60n * 60n, STEP, DROP_BPS, 0n],
+        { account: alice.account },
+      ),
+      "BadDuration",
+    );
+
+    await auction.write.createAuction(
+      [tokenId, mockUsdc.address, START, FLOOR, 2n * 24n * 60n * 60n, STEP, DROP_BPS, 0n],
+      { account: alice.account },
+    );
+    expect(await auction.read.isOnAuction([tokenId])).to.equal(true);
   });
 
   it("seller can cancel an unsold auction", async function () {

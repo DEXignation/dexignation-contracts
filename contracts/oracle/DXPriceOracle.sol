@@ -114,6 +114,15 @@ contract DXPriceOracle is IDXPriceOracle, Ownable {
     uint256 premiumDuration,
     uint256 premiumHalfLife
   );
+  event PolUsdOracleUpdated(address indexed previousOracle, address indexed newOracle);
+  event LinkOraclesUpdated(
+    address indexed previousLinkPolOracle,
+    address indexed previousLinkUsdOracle,
+    address indexed newLinkPolOracle,
+    address newLinkUsdOracle
+  );
+  event PriceSourceUpdated(PriceSource previousSource, PriceSource newSource);
+  event MaxOracleDelayUpdated(uint256 previousDelay, uint256 newDelay);
 
   /// @param _rentPrices Array of 5 attoUSD prices in order: [1y, 3y, 5y, 10y, 15y].
   ///                    1/3/5/10/15년 attoUSD 가격 배열.
@@ -175,8 +184,12 @@ contract DXPriceOracle is IDXPriceOracle, Ownable {
   /// @notice Configure the Direct (POL/USD) aggregator and switch to it.
   ///         Direct(POL/USD) 오라클 설정 및 전환.
   function setPolUsdOracle(address _polUsdOracle) external onlyOwner {
+    address previousOracle = address(polUsdOracle);
+    PriceSource previousSource = priceSource;
     polUsdOracle = AggregatorV3Interface(_polUsdOracle);
     priceSource = PriceSource.Direct;
+    emit PolUsdOracleUpdated(previousOracle, _polUsdOracle);
+    emit PriceSourceUpdated(previousSource, PriceSource.Direct);
   }
 
   /// @notice Configure the LINK-based oracles and switch to ViaLink.
@@ -185,9 +198,19 @@ contract DXPriceOracle is IDXPriceOracle, Ownable {
     address _linkPolOracle,
     address _linkUsdOracle
   ) external onlyOwner {
+    address previousLinkPolOracle = address(linkPolOracle);
+    address previousLinkUsdOracle = address(linkUsdOracle);
+    PriceSource previousSource = priceSource;
     linkPolOracle = AggregatorV3Interface(_linkPolOracle);
     linkUsdOracle = AggregatorV3Interface(_linkUsdOracle);
     priceSource = PriceSource.ViaLink;
+    emit LinkOraclesUpdated(
+      previousLinkPolOracle,
+      previousLinkUsdOracle,
+      _linkPolOracle,
+      _linkUsdOracle
+    );
+    emit PriceSourceUpdated(previousSource, PriceSource.ViaLink);
   }
 
   /// @notice Switch the active conversion path. The corresponding aggregators
@@ -203,14 +226,18 @@ contract DXPriceOracle is IDXPriceOracle, Ownable {
       ) revert OracleNotConfigured();
     }
 
+    PriceSource previousSource = priceSource;
     priceSource = _source;
+    emit PriceSourceUpdated(previousSource, _source);
   }
 
   /// @notice Set the staleness threshold (1h ~ 48h).
   ///         staleness 임계치 설정 (1시간 ~ 48시간).
   function setMaxoracleDelay(uint256 delay) external onlyOwner {
     if (delay < 1 hours || delay > 48 hours) revert InvalidOracleDelay();
+    uint256 previousDelay = maxOracleDelay;
     maxOracleDelay = delay;
+    emit MaxOracleDelayUpdated(previousDelay, delay);
   }
 
   // ──────────────────────────────────────────────────────────────────────────

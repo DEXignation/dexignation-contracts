@@ -28,7 +28,6 @@ import {DXNamehash} from "../utils/DXNamehash.sol";
 ///         리졸버에 연결한다. EIP-181 패턴.
 contract DXReverseRegistrar {
   IDXRegistry public immutable registry;
-  bytes32 public immutable baseNode;
 
   /// @notice Pre-computed namehash of "addr.reverse".
   ///         "addr.reverse"의 사전 계산된 namehash.
