@@ -268,15 +268,19 @@ contract DXNStaking is Ownable, ReentrancyGuard {
   ///         This implementation measures the actual balance delta since
   ///         the last `notifyReward` for this token, so a notifier can
   ///         neither over-report nor under-report what was deposited.
-  ///         An optimistic `amount` argument is accepted as a hint but
-  ///         the contract uses min(amount, deltaBalance) — preventing
-  ///         both inflation attacks and silent under-distribution.
+  ///         A non-zero `amount` argument is accepted as the notifier's
+  ///         distribution intent, but the contract distributes the full
+  ///         currently-unaccounted balance. This carries forward any previous
+  ///         rounding dust so it can be attributed in a later notification
+  ///         instead of being permanently reserved as unclaimable rewards.
   ///
   ///         RevenueDistributor가 `rewardToken`을 이 컨트랙트로 전송한
   ///         *후* 호출. 이 구현은 마지막 `notifyReward` 이후 잔액 변동을
   ///         실측하므로 notifier가 부풀리거나 과소 보고할 수 없음.
-  ///         `amount` 인자는 hint로 받되 실제로는 min(amount, deltaBalance)
-  ///         를 사용.
+  ///         0이 아닌 `amount` 인자는 notifier의 분배 의사 표시로 받되,
+  ///         실제로는 현재 미회계 잔액 전체를 분배 대상으로 삼는다. 이전
+  ///         정수 나눗셈에서 생긴 dust를 다음 notify에 이월해 영구적으로
+  ///         claim 불가능한 예약분이 되지 않게 한다.
   function notifyReward(address rewardToken, uint256 amount) external nonReentrant {
     if (!notifiers[msg.sender]) revert NotNotifier();
     if (!isRewardAsset[rewardToken]) revert UnknownRewardAsset(rewardToken);
@@ -291,12 +295,15 @@ contract DXNStaking is Ownable, ReentrancyGuard {
     uint256 accounted = _accountedBalance(rewardToken);
     uint256 available = currentBalance > accounted ? currentBalance - accounted : 0;
 
-    // Use min(hint, actual) so a notifier can pass amount=type(uint256).max
-    // to mean "sweep everything new", or pass the exact transferred value
-    // for stricter accounting.
-    //   hint와 실제 중 작은 값 사용. amount=max로 호출하면 "새로 들어온 거 다",
-    //   정확한 값으로 호출하면 엄격 회계.
-    uint256 reward = amount < available ? amount : available;
+    // Treat amount=0 as a no-op, but otherwise sweep the full unaccounted
+    // balance. RevenueDistributor passes only the latest staking share as
+    // `amount`; sweeping `available` folds prior rounding dust into this
+    // distribution attempt.
+    //   amount=0은 no-op으로 두되, 그 외에는 미회계 잔액 전체를 sweep한다.
+    //   RevenueDistributor는 최신 staking share만 `amount`로 넘기므로,
+    //   `available`을 사용해야 이전 rounding dust가 이번 분배에 합산된다.
+    if (amount == 0) return;
+    uint256 reward = available;
     if (reward == 0) return;
 
     // If the pool is too small, do not carry rewards forward for the first
@@ -310,15 +317,22 @@ contract DXNStaking is Ownable, ReentrancyGuard {
       return;
     }
 
-    accRewardPerShare[rewardToken] += (reward * ACC_PRECISION) / totalStaked;
-    _totalDistributed[rewardToken] += reward;
-    emit RewardNotified(rewardToken, reward);
+    uint256 accDelta = (reward * ACC_PRECISION) / totalStaked;
+    if (accDelta == 0) return;
+
+    uint256 distributed = (accDelta * totalStaked) / ACC_PRECISION;
+    accRewardPerShare[rewardToken] += accDelta;
+    _totalDistributed[rewardToken] += distributed;
+    emit RewardNotified(rewardToken, distributed);
   }
 
-  /// @dev Total rewards ever distributed via notifyReward, per asset.
+  /// @dev Total claimable rewards ever credited via notifyReward, per asset.
   ///      Used to compute "accounted balance" without per-staker iteration.
-  ///      자산별 누적 분배 총량. per-staker 순회 없이 "accounted balance"
-  ///      계산용.
+  ///      Rounding dust is intentionally excluded so it remains available for
+  ///      a later notification.
+  ///      자산별 누적 claim 가능 분배 총량. per-staker 순회 없이
+  ///      "accounted balance" 계산용. rounding dust는 제외해 다음 notify에서
+  ///      다시 분배 대상으로 남긴다.
   mapping(address => uint256) private _totalDistributed;
 
   /// @dev Tokens already claimed by stakers, per asset. Together with

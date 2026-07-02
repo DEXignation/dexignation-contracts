@@ -159,6 +159,7 @@ contract DXRegistry is IDXRegistry {
   ///         루트 소유자 전용. `issueSubnodeRecordLocked` 호출이 허용된 판매
   ///         모듈을 인가/해제한다. 루트 노드(0x0) 소유자가 레지스트리 관리자.
   function setSaleModule(address module, bool allowed) external override authorised(0x0) {
+    if (module == address(0)) revert ZeroAddress();
     saleModule[module] = allowed;
     emit SaleModuleSet(module, allowed);
   }

@@ -27,7 +27,7 @@ const POLYGON_USDC = "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359";
 
 // ── Trading-layer config ──────────────────────────────────────────────────
 const FEE_BPS = 250n;            // 2.5% protocol fee (marketplace & auctions)
-const MIN_INCREMENT_BPS = 500n;  // English: a new bid must beat top by +5%
+const MIN_INCREMENT_BPS = 1000n;  // English: a new bid must beat top by +10%
 const EXTEND_WINDOW = 600n;      // English anti-snipe: bids within 10 min …
 const EXTEND_BY = 1200n;         //   … push the deadline +20 min
 

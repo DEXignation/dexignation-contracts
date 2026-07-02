@@ -291,7 +291,7 @@ describe("DXMarketplace — fixed-price P2P sales of .dex 2LD", function () {
     const aliceBefore = await mockUsdc.read.balanceOf([alice.account.address]);
     const feeBefore = await mockUsdc.read.balanceOf([owner.account.address]);
 
-    await marketplace.write.buy([tokenId], { account: bob.account });
+    await marketplace.write.buy([tokenId, PRICE], { account: bob.account });
 
     // Domain now owned by bob.
     const newOwner = await registrar.read.ownerOf([tokenId]);
@@ -326,7 +326,27 @@ describe("DXMarketplace — fixed-price P2P sales of .dex 2LD", function () {
     await mockUsdc.write.approve([marketplace.address, PRICE - 1n], { account: bob.account });
 
     await expectRevert(
-      marketplace.write.buy([tokenId], { account: bob.account }),
+      marketplace.write.buy([tokenId, PRICE], { account: bob.account }),
+    );
+  });
+
+  it("buy reverts if the live listing price exceeds the buyer maxPrice", async function () {
+    const deployed = await deploy();
+    const { marketplace, mockUsdc, alice, bob } = deployed;
+    const tokenId = await listName(deployed, alice, "roy-slip");
+    const raisedPrice = PRICE + 1n;
+
+    await mockUsdc.write.mint([bob.account.address, MINT], { account: bob.account });
+    await mockUsdc.write.approve([marketplace.address, raisedPrice], {
+      account: bob.account,
+    });
+    await marketplace.write.updatePrice([tokenId, raisedPrice], {
+      account: alice.account,
+    });
+
+    await expectRevert(
+      marketplace.write.buy([tokenId, PRICE], { account: bob.account }),
+      "PriceExceedsMax",
     );
   });
 
@@ -465,7 +485,7 @@ describe("DXMarketplace — fixed-price P2P sales of .dex 2LD", function () {
     await mockUsdc.write.mint([bob.account.address, MINT], { account: bob.account });
     await mockUsdc.write.approve([marketplace.address, PRICE], { account: bob.account });
     await expectRevert(
-      marketplace.write.buy([tokenId], { account: bob.account }),
+      marketplace.write.buy([tokenId, PRICE], { account: bob.account }),
       "SellerNoLongerOwns",
     );
   });
@@ -514,7 +534,7 @@ describe("DXMarketplace — fixed-price P2P sales of .dex 2LD", function () {
     // bob buys roy.dex.
     await mockUsdc.write.mint([bob.account.address, MINT], { account: bob.account });
     await mockUsdc.write.approve([marketplace.address, PRICE], { account: bob.account });
-    await marketplace.write.buy([tokenId], { account: bob.account });
+    await marketplace.write.buy([tokenId, PRICE], { account: bob.account });
 
     // Parent control moved to bob. bob, as the new parent owner, now controls
     // the pay.roy.dex subnode (can reassign it) — the subtree follows.

@@ -83,9 +83,16 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
   uint8 public constant DEFAULT_MAX_EXTENSIONS = 3;
   uint8 public maxExtensions;
 
-  /// @notice Minimum bid increment over the current top, in bps (e.g. 500 = 5%).
-  ///         직전 최고가 대비 최소 입찰 증가율(bps, 500 = 5%).
+  /// @notice Minimum bid increment over the current top, in bps (e.g. 1000 = 10%).
+  ///         직전 최고가 대비 최소 입찰 증가율(bps, 1000 = 10%).
   uint256 public minIncrementBps;
+
+  /// @notice Hard cap on `minIncrementBps`. 10000 bps = 100% (a new bid must at
+  ///         most double the top). Prevents an absurd increment from freezing
+  ///         the auction — no bid could ever clear the next threshold.
+  ///         `minIncrementBps` 하드캡. 10000 bps = 100%(다음 입찰이 최대 2배).
+  ///         과도한 증가율로 아무도 다음 문턱을 못 넘겨 경매가 마비되는 것 방지.
+  uint256 public constant MAX_INCREMENT_BPS = 10000;
 
   /// @notice If a bid lands within `extendWindow` of the end, the deadline is
   ///         pushed to `now + extendBy` (anti-snipe).
@@ -168,6 +175,7 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
   error BadDuration();
   error BadDurationBounds();
   error ZeroMinIncrement();
+  error IncrementTooHigh(uint256 requested, uint256 max);
   error BadExtension();
 
   constructor(
@@ -182,6 +190,7 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
     if (_registrar == address(0)) revert ZeroAddress();
     if (_protocolFeeBps > MAX_FEE_BPS) revert FeeTooHigh(_protocolFeeBps, MAX_FEE_BPS);
     if (_minIncrementBps == 0) revert ZeroMinIncrement();
+    if (_minIncrementBps > MAX_INCREMENT_BPS) revert IncrementTooHigh(_minIncrementBps, MAX_INCREMENT_BPS);
     if (_extendBy <= _extendWindow) revert BadExtension();
     registrar = IDXRegistrarAuction(_registrar);
     feeRecipient = _feeRecipient;
@@ -226,6 +235,7 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
     external onlyOwner
   {
     if (_minIncrementBps == 0) revert ZeroMinIncrement();
+    if (_minIncrementBps > MAX_INCREMENT_BPS) revert IncrementTooHigh(_minIncrementBps, MAX_INCREMENT_BPS);
     if (_extendBy <= _extendWindow) revert BadExtension();
     minIncrementBps = _minIncrementBps;
     extendWindow = _extendWindow;

@@ -194,4 +194,15 @@ describe("DXRegistry — direct subname issuance", function () {
       "InvalidLabel",
     );
   });
+
+  it("rejects zero address sale modules", async function () {
+    const d = await deploy();
+
+    await expectRevert(
+      d.registry.write.setSaleModule([ZERO_ADDR, true], {
+        account: d.owner.account,
+      }),
+      "ZeroAddress",
+    );
+  });
 });

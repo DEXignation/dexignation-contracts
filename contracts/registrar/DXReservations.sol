@@ -104,7 +104,7 @@ contract DXReservations is Ownable {
     uint256 len = labels.length;
     for (uint256 i = 0; i < len; i++) {
       bytes32 lh = keccak256(bytes(labels[i]));
-      if (reservations[lh].reserved) revert AlreadyReserved(lh);
+      if (reservations[lh].reserved) continue;
       reservations[lh] = Reservation({
         reserved: true,
         reason: reason,

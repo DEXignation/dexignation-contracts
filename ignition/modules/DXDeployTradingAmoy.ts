@@ -17,7 +17,7 @@ import DXDeployAmoy from "./DXDeployAmoy.js";
 
 // Trading-layer config
 const FEE_BPS = 250n;            // 2.5% protocol fee (marketplace & auctions)
-const MIN_INCREMENT_BPS = 500n;  // English: a new bid must beat top by +5%
+const MIN_INCREMENT_BPS = 1000n;  // English: a new bid must beat top by +10%
 const EXTEND_WINDOW = 600n;      // English anti-snipe: bids within 10 min...
 const EXTEND_BY = 1200n;         // ...push the deadline +20 min
 

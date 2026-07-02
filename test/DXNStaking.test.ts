@@ -142,4 +142,37 @@ describe("DXNStaking", function () {
     await staking.write.claim([rewardToken.address], { account: alice.account });
     expect(await rewardToken.read.balanceOf([alice.account.address])).to.equal(expectedDistributed);
   });
+
+  it("carries rounding dust forward instead of reserving it as distributed", async function () {
+    const deployed = await deploy();
+    const { alice, owner, staking, rewardToken } = deployed;
+
+    await staking.write.setMinTotalStakeForRewards([1n], {
+      account: owner.account,
+    });
+    await stakeFor(deployed, 3n);
+
+    await rewardToken.write.mint([staking.address, 1n]);
+    await staking.write.notifyReward([rewardToken.address, 1n], {
+      account: owner.account,
+    });
+
+    expect(await staking.read.pendingReward([alice.account.address, rewardToken.address])).to.equal(
+      0n,
+    );
+    expect(await staking.read.pendingNotify([rewardToken.address])).to.equal(1n);
+
+    await rewardToken.write.mint([staking.address, 2n]);
+    await staking.write.notifyReward([rewardToken.address, 2n], {
+      account: owner.account,
+    });
+
+    expect(await staking.read.pendingReward([alice.account.address, rewardToken.address])).to.equal(
+      3n,
+    );
+
+    await staking.write.claim([rewardToken.address], { account: alice.account });
+    expect(await rewardToken.read.balanceOf([alice.account.address])).to.equal(3n);
+    expect(await staking.read.pendingNotify([rewardToken.address])).to.equal(0n);
+  });
 });

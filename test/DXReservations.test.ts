@@ -72,6 +72,17 @@ describe("DXReservations", function () {
     expect(await reservations.read.isReserved(["facebook"])).to.equal(false);
   });
 
+  it("bulk reservation skips duplicate labels and continues", async function () {
+    const { reservations, owner } = await deploy();
+    await reservations.write.reserveLabels([["apple", "google", "apple", "amazon"], 1], {
+      account: owner.account,
+    });
+
+    expect(await reservations.read.isReserved(["apple"])).to.equal(true);
+    expect(await reservations.read.isReserved(["google"])).to.equal(true);
+    expect(await reservations.read.isReserved(["amazon"])).to.equal(true);
+  });
+
   it("rejects duplicate reservation", async function () {
     const { reservations, owner } = await deploy();
     await reservations.write.reserveLabel(

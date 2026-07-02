@@ -25,7 +25,7 @@ const USDT_ADDRESS = (process.env.USDT_ADDRESS || "") as `0x${string}`;
 
 // ── 거래 레이어 파라미터 ─────────────────────────────────────────────────────
 const FEE_BPS = 250n;             // 2.5%
-const MIN_INCREMENT_BPS = 500n;   // 영국식 최소 입찰 증가 +5%
+const MIN_INCREMENT_BPS = 1000n;   // 영국식 최소 입찰 증가 +10%
 const EXTEND_WINDOW = 600n;       // 마감 10분 이내 입찰 시 …
 const EXTEND_BY = 1200n;          //   … +20분 연장
 

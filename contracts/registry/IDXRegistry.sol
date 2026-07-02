@@ -149,6 +149,10 @@ interface IDXRegistry {
   ///      호출자가 인가된 판매 모듈이 아님.
   error NotSaleModule(address caller);
 
+  /// @dev Address argument cannot be zero.
+  ///      주소 인자는 zero address일 수 없음.
+  error ZeroAddress();
+
   // ── Functions ─────────────────────────────────────────────────────────────
 
   function setOwner(bytes32 node, address owner) external;

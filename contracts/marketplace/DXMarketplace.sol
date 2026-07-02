@@ -190,6 +190,7 @@ contract DXMarketplace is Ownable, ReentrancyGuard {
   error NotSeller(uint256 tokenId, address caller);
   error SellerNoLongerOwns(uint256 tokenId);
   error FeeTooHigh(uint256 requested, uint256 max);
+  error PriceExceedsMax(uint256 price, uint256 maxPrice);
 
   // ──────────────────────────────────────────────────────────────────────────
   // Construction / 생성
@@ -361,18 +362,25 @@ contract DXMarketplace is Ownable, ReentrancyGuard {
   ///         NFT, and a seller can never lose the NFT without being paid.
   ///
   ///         The buyer must first `approve` this marketplace to spend `price`
-  ///         of the listing's payToken.
+  ///         of the listing's payToken. `maxPrice` is the buyer's slippage
+  ///         guard: if the listed price was raised after the buyer signed or
+  ///         submitted the transaction, the call reverts instead of settling
+  ///         at the higher amount.
   ///
   ///         리스팅된 도메인 구매. 원자적: 같은 트랜잭션에서 구매자의
   ///         스테이블코인을 회수하고 NFT를 이전한다. 하나라도 실패하면 전체
   ///         revert — 구매자가 NFT 없이 지불하거나, 판매자가 대금 없이 NFT를
   ///         잃는 일이 불가능하다. 구매자는 먼저 이 마켓에 payToken을 `price`
-  ///         만큼 approve해야 한다.
+  ///         만큼 approve해야 한다. `maxPrice`는 구매자 슬리피지 가드다.
+  ///         구매자가 서명/제출한 뒤 리스팅 가격이 올라가면 더 비싼 가격으로
+  ///         체결하지 않고 revert한다.
   ///
-  /// @param tokenId  The listed 2LD token id.
-  function buy(uint256 tokenId) external nonReentrant {
+  /// @param tokenId   The listed 2LD token id.
+  /// @param maxPrice  Maximum acceptable price in the listing's payToken.
+  function buy(uint256 tokenId, uint256 maxPrice) external nonReentrant {
     Listing memory l = listings[tokenId];
     if (!l.active) revert NotListed(tokenId);
+    if (l.price > maxPrice) revert PriceExceedsMax(l.price, maxPrice);
 
     // Re-check ownership at purchase time. Between list() and buy() the seller
     // may have transferred the NFT elsewhere or let it expire. DXRegistrar
