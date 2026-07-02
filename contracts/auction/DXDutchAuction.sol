@@ -239,7 +239,7 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
     if (registrar.getApproved(tokenId) != address(this) &&
         !registrar.isApprovedForAll(msg.sender, address(this)))
       revert AuctionNotApproved(tokenId);
-    if (_isActive(auctions[tokenId]))
+    if (auctions[tokenId].seller != address(0) && !auctions[tokenId].settled)
       revert AlreadyAuctioned(tokenId);
 
     if (address(marketplace) != address(0)) {
@@ -278,6 +278,7 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
   function currentPrice(uint256 tokenId) public view returns (uint256) {
     Auction memory a = auctions[tokenId];
     if (a.seller == address(0)) revert AuctionNotFound(tokenId);
+    if (a.settled) revert AlreadySettled(tokenId);
 
     uint256 steps = (block.timestamp - a.startTime) / a.stepInterval;
     uint256 totalDrop = steps * a.dropPerStep;
@@ -341,13 +342,12 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
   }
 
   // ── Views ─────────────────────────────────────────────────────────────────
-  /// @notice True if a live (created, not settled, seller still owns) auction
-  ///         exists. Used for the AUCTION mark and mutual exclusion.
-  ///         진행 중(생성됨·미정산·판매자 소유) 경매가 있으면 true. AUCTION 마크와
-  ///         상호 배타 검사에 사용.
+  /// @notice True if a created, not-settled auction still occupies the token.
+  ///         Used for the AUCTION mark and mutual exclusion.
+  ///         생성됨·미정산 경매가 있으면 true. AUCTION 마크와 상호 배타 검사에 사용.
   function isOnAuction(uint256 tokenId) external view returns (bool) {
     Auction memory a = auctions[tokenId];
-    if (!_isActive(a)) return false;
+    if (a.seller == address(0) || a.settled) return false;
     try registrar.ownerOf(tokenId) returns (address o) {
       return o == a.seller;
     } catch { return false; }
@@ -362,10 +362,6 @@ contract DXDutchAuction is Ownable, ReentrancyGuard {
     Auction memory a = auctions[tokenId];
     return (a.seller, a.payToken, a.startPrice, a.floorPrice,
             a.startTime, a.endTime, a.stepInterval, a.dropPerStep, a.settled);
-  }
-
-  function _isActive(Auction memory a) internal view returns (bool) {
-    return a.seller != address(0) && !a.settled && block.timestamp < a.endTime;
   }
 
   function _notifyMetadataUpdate(uint256 tokenId) internal {

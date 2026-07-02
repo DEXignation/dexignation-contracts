@@ -7,6 +7,7 @@
 
 import { expect } from "chai";
 import { network } from "hardhat";
+import { keccak256, toBytes } from "viem";
 
 async function expectRevert(promise: Promise<unknown>, keyword?: string): Promise<void> {
   try {
@@ -81,6 +82,23 @@ describe("DXReservations", function () {
     expect(await reservations.read.isReserved(["apple"])).to.equal(true);
     expect(await reservations.read.isReserved(["google"])).to.equal(true);
     expect(await reservations.read.isReserved(["amazon"])).to.equal(true);
+  });
+
+  it("skipping an already-reserved label preserves its original reason (continue, not overwrite)", async function () {
+    const { reservations, owner } = await deploy();
+    // reserve "apple" as Trademark (1)
+    await reservations.write.reserveLabels([["apple"], 1], { account: owner.account });
+    // bulk re-reserve including "apple" but as Premium (2). Because the loop
+    // `continue`s on an already-reserved label, "apple" must keep reason=Trademark
+    // and only the fresh label "kiwi" gets written.
+    await reservations.write.reserveLabels([["apple", "kiwi"], 2], { account: owner.account });
+
+    const appleHash = keccak256(toBytes("apple"));
+    // reservations(bytes32) => (reserved, reason, claimableBy, createdAt)
+    const entry = (await reservations.read.reservations([appleHash])) as unknown[];
+    expect(entry[0]).to.equal(true);   // still reserved
+    expect(entry[1]).to.equal(1);      // reason unchanged (Trademark), NOT overwritten to Premium(2)
+    expect(await reservations.read.isReserved(["kiwi"])).to.equal(true); // fresh label written
   });
 
   it("rejects duplicate reservation", async function () {

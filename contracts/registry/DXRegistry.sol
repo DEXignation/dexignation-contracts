@@ -211,9 +211,13 @@ contract DXRegistry is IDXRegistry {
   ) public override authorised(node) returns (bytes32) {
     bytes32 subnode = keccak256(abi.encodePacked(node, label));
     _prepareSubnodeParentMutation(subnode);
+    address previousOwner = records[subnode].owner;
     parentOf[subnode] = node;
     _setOwner(subnode, _owner);
     emit NewOwner(node, label, _owner);
+    if (previousOwner != address(0) && previousOwner != _owner) {
+      _invalidate(subnode);
+    }
     return subnode;
   }
 

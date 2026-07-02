@@ -34,6 +34,9 @@ const EXTEND_BY = 1200n;          // +20 min
 const AUCTION_DUR = 24n * 60n * 60n; // 1 day
 const DUTCH_DUR = 7n * 24n * 60n * 60n;
 const RESERVE = 100n * 10n ** 6n; // 100 USDC
+// Anti-grief bond = max(reserve × 10%, minDeposit). For RESERVE=100: 10% = 10,
+// which equals the 10-USDC floor, so DEPOSIT = 10 USDC in these tests.
+const DEPOSIT = 10n * 10n ** 6n;
 const MINT = 10_000n * 10n ** 6n;
 const GRACE_PERIOD = 70n * 24n * 60n * 60n;
 const ERC4906_INTERFACE_ID = "0x49064906";
@@ -92,6 +95,8 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
     const { auction, registrar, mockUsdc } = d;
     const tokenId = await registerName(d, seller, label);
     await registrar.write.approve([auction.address, tokenId], { account: seller.account });
+    // Seller must also fund + approve the anti-grief bond, pulled at createAuction.
+    await fund(d, seller);
     await auction.write.createAuction(
       [tokenId, mockUsdc.address, reserve, AUCTION_DUR], { account: seller.account });
     return tokenId;
@@ -149,6 +154,7 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
     expect(await registrar.read.supportsInterface([ERC4906_INTERFACE_ID])).to.equal(true);
 
     await registrar.write.approve([auction.address, tokenId], { account: alice.account });
+    await fund(d, alice); // fund + approve the anti-grief bond
     const createHash = await auction.write.createAuction(
       [tokenId, mockUsdc.address, RESERVE, AUCTION_DUR],
       { account: alice.account },
@@ -168,6 +174,7 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
 
     await registrar.write.approve([auction.address, tokenId], { account: alice.account });
     await registrar.write.setAuctions([ZERO, ZERO], { account: owner.account });
+    await fund(d, alice); // fund + approve the anti-grief bond
 
     await auction.write.createAuction(
       [tokenId, mockUsdc.address, RESERVE, AUCTION_DUR],
@@ -233,6 +240,50 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
       "AuctionedElsewhere");
   });
 
+  it("keeps an expired but unsettled auction marked as occupying the token", async function () {
+    const d = await deploy();
+    const { auction, mockUsdc, registrar, alice, testClient } = d;
+    const tokenId = await startAuction(d, alice, "expired-english");
+
+    await testClient.increaseTime({ seconds: Number(AUCTION_DUR + 10n) });
+    await testClient.mine({ blocks: 1 });
+
+    expect(await auction.read.isOnAuction([tokenId])).to.equal(true);
+
+    await registrar.write.approve([auction.address, tokenId], { account: alice.account });
+    await expectRevert(
+      auction.write.createAuction([tokenId, mockUsdc.address, RESERVE, AUCTION_DUR],
+        { account: alice.account }),
+      "AlreadyAuctioned",
+    );
+  });
+
+  it("rejects createAuction while an expired Dutch auction is still unsettled", async function () {
+    const d = await deploy();
+    const dutch = await d.viem.deployContract("DXDutchAuction", [
+      d.registrar.address, d.owner.account.address, FEE_BPS, d.owner.account.address]);
+    await dutch.write.setPayToken([d.mockUsdc.address, true], { account: d.owner.account });
+    await d.auction.write.setPeerAuction([dutch.address], { account: d.owner.account });
+
+    const tokenId = await registerName(d, d.alice, "expired-dutch-first");
+    await d.registrar.write.approve([dutch.address, tokenId], { account: d.alice.account });
+    await dutch.write.createAuction(
+      [tokenId, d.mockUsdc.address, 1_000n * 10n ** 6n, RESERVE, DUTCH_DUR, 3600n, 0n, 100n * 10n ** 6n],
+      { account: d.alice.account },
+    );
+
+    await d.testClient.increaseTime({ seconds: Number(DUTCH_DUR + 10n) });
+    await d.testClient.mine({ blocks: 1 });
+    expect(await dutch.read.isOnAuction([tokenId])).to.equal(true);
+
+    await d.registrar.write.approve([d.auction.address, tokenId], { account: d.alice.account });
+    await expectRevert(
+      d.auction.write.createAuction([tokenId, d.mockUsdc.address, RESERVE, AUCTION_DUR],
+        { account: d.alice.account }),
+      "AuctionedElsewhere",
+    );
+  });
+
   // ── bid + escrow + pull refund ──────────────────────────────────────────────
   it("bids are escrowed; an outbid bidder is credited and can withdraw", async function () {
     const d = await deploy();
@@ -242,9 +293,9 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
 
     const bobStart = await mockUsdc.read.balanceOf([bob.account.address]);
     await auction.write.bid([tokenId, RESERVE], { account: bob.account });           // 100
-    // escrowed: bob down 100, contract holds 100
+    // escrowed: bob down 100; contract holds the seller's bond + bob's bid
     expect(bobStart - (await mockUsdc.read.balanceOf([bob.account.address]))).to.equal(RESERVE);
-    expect(await mockUsdc.read.balanceOf([auction.address])).to.equal(RESERVE);
+    expect(await mockUsdc.read.balanceOf([auction.address])).to.equal(DEPOSIT + RESERVE);
 
     const higher = RESERVE + (RESERVE * MIN_INCREMENT_BPS) / 10000n;                  // +5% = 105
     await auction.write.bid([tokenId, higher], { account: carol.account });
@@ -370,6 +421,7 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
     const { auction, registrar, mockUsdc, alice, owner } = d;
     const tokenId = await registerName(d, alice, "eng-duration-guard");
     await registrar.write.approve([auction.address, tokenId], { account: alice.account });
+    await fund(d, alice); // fund + approve the anti-grief bond for the later success case
 
     expect(await auction.read.MIN_DURATION_LIMIT()).to.equal(24n * 60n * 60n);
     expect(await auction.read.MAX_DURATION_LIMIT()).to.equal(30n * 24n * 60n * 60n);
@@ -446,7 +498,8 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
     expect((await registrar.read.ownerOf([tokenId])).toLowerCase())
       .to.equal(carol.account.address.toLowerCase());
     const fee = (top * FEE_BPS) / 10000n;
-    expect((await mockUsdc.read.balanceOf([alice.account.address])) - aliceBefore).to.equal(top - fee);
+    // seller receives proceeds (top − fee) AND gets the anti-grief bond back
+    expect((await mockUsdc.read.balanceOf([alice.account.address])) - aliceBefore).to.equal(top - fee + DEPOSIT);
     expect((await mockUsdc.read.balanceOf([owner.account.address])) - feeBefore).to.equal(fee);
     // registry control + subname followed to carol
     expect((await registry.read.owner([royNode])).toLowerCase())
@@ -507,12 +560,12 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
     // NFT stays with dave (the transfer was skipped)
     expect((await registrar.read.ownerOf([tokenId])).toLowerCase())
       .to.equal(dave.account.address.toLowerCase());
-    // winner credited for the full refund
-    expect(await auction.read.pendingReturns([mockUsdc.address, bob.account.address])).to.equal(RESERVE);
+    // winner credited: full bid refund PLUS the seller's forfeited bond
+    expect(await auction.read.pendingReturns([mockUsdc.address, bob.account.address])).to.equal(RESERVE + DEPOSIT);
     // and can actually withdraw it
     const before = await mockUsdc.read.balanceOf([bob.account.address]);
     await auction.write.withdraw([mockUsdc.address], { account: bob.account });
-    expect((await mockUsdc.read.balanceOf([bob.account.address])) - before).to.equal(RESERVE);
+    expect((await mockUsdc.read.balanceOf([bob.account.address])) - before).to.equal(RESERVE + DEPOSIT);
     // auction is closed
     expect(await auction.read.isOnAuction([tokenId])).to.equal(false);
   });
@@ -534,10 +587,10 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
 
     await auction.write.settle([tokenId], { account: dave.account });
 
-    expect(await auction.read.pendingReturns([mockUsdc.address, bob.account.address])).to.equal(RESERVE);
+    expect(await auction.read.pendingReturns([mockUsdc.address, bob.account.address])).to.equal(RESERVE + DEPOSIT);
     const before = await mockUsdc.read.balanceOf([bob.account.address]);
     await auction.write.withdraw([mockUsdc.address], { account: bob.account });
-    expect((await mockUsdc.read.balanceOf([bob.account.address])) - before).to.equal(RESERVE);
+    expect((await mockUsdc.read.balanceOf([bob.account.address])) - before).to.equal(RESERVE + DEPOSIT);
     expect(await auction.read.isOnAuction([tokenId])).to.equal(false);
   });
 
@@ -564,10 +617,11 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
     //   NFT는 alice에게 그대로(이전 생략), 낙찰자는 환불 적립 후 인출 가능.
     expect((await registrar.read.ownerOf([tokenId])).toLowerCase())
       .to.equal(alice.account.address.toLowerCase());
-    expect(await auction.read.pendingReturns([mockUsdc.address, bob.account.address])).to.equal(RESERVE);
+    // winner refunded AND compensated with the seller's forfeited bond
+    expect(await auction.read.pendingReturns([mockUsdc.address, bob.account.address])).to.equal(RESERVE + DEPOSIT);
     const before = await mockUsdc.read.balanceOf([bob.account.address]);
     await auction.write.withdraw([mockUsdc.address], { account: bob.account });
-    expect((await mockUsdc.read.balanceOf([bob.account.address])) - before).to.equal(RESERVE);
+    expect((await mockUsdc.read.balanceOf([bob.account.address])) - before).to.equal(RESERVE + DEPOSIT);
     expect(await auction.read.isOnAuction([tokenId])).to.equal(false);
   });
 
@@ -629,5 +683,35 @@ describe("DXEnglishAuction — timed ascending auction for .dex 2LD", function (
       }),
       "ZeroMinIncrement",
     );
+  });
+
+  it("rejects minIncrementBps above MAX_INCREMENT_BPS in constructor and setter", async function () {
+    const d = await deploy();
+    const MAX = await d.auction.read.MAX_INCREMENT_BPS() as bigint;
+    expect(MAX).to.equal(10000n);
+
+    // constructor: one over the cap must revert
+    await expectRevert(
+      d.viem.deployContract("DXEnglishAuction", [
+        d.registrar.address, d.owner.account.address, FEE_BPS,
+        MAX + 1n, EXTEND_WINDOW, EXTEND_BY,
+        d.owner.account.address,
+      ]),
+      "IncrementTooHigh",
+    );
+
+    // setter: one over the cap must revert
+    await expectRevert(
+      d.auction.write.setAuctionParams([MAX + 1n, EXTEND_WINDOW, EXTEND_BY], {
+        account: d.owner.account,
+      }),
+      "IncrementTooHigh",
+    );
+
+    // boundary: exactly at the cap is allowed
+    await d.auction.write.setAuctionParams([MAX, EXTEND_WINDOW, EXTEND_BY], {
+      account: d.owner.account,
+    });
+    expect(await d.auction.read.minIncrementBps()).to.equal(MAX);
   });
 });

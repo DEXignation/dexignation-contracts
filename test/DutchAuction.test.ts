@@ -166,10 +166,67 @@ describe("DXDutchAuction — step declining-price auction", function () {
 
     const tokenId = await registerName(d, d.alice, "dual-english-first");
     await d.registrar.write.approve([english.address, tokenId], { account: d.alice.account });
+    // English auction now pulls an anti-grief bond → fund + approve it in payToken.
+    await d.mockUsdc.write.mint([d.alice.account.address, MINT], { account: d.alice.account });
+    await d.mockUsdc.write.approve([english.address, MINT], { account: d.alice.account });
     await english.write.createAuction(
       [tokenId, d.mockUsdc.address, USDC(100n), 24n * 60n * 60n],
       { account: d.alice.account },
     );
+
+    await d.registrar.write.approve([d.auction.address, tokenId], { account: d.alice.account });
+    await expectRevert(
+      d.auction.write.createAuction(
+        [tokenId, d.mockUsdc.address, START, FLOOR, DUTCH_DUR, STEP, DROP_BPS, 0n],
+        { account: d.alice.account },
+      ),
+      "AuctionedElsewhere",
+    );
+  });
+
+  it("keeps an expired but unsettled Dutch auction marked as occupying the token", async function () {
+    const d = await deploy();
+    const { auction, mockUsdc, registrar, alice, testClient } = d;
+    const tokenId = await startRate(d, alice, "expired-dutch");
+
+    await testClient.increaseTime({ seconds: Number(DUTCH_DUR + 10n) });
+    await testClient.mine({ blocks: 1 });
+
+    expect(await auction.read.isOnAuction([tokenId])).to.equal(true);
+
+    await registrar.write.approve([auction.address, tokenId], { account: alice.account });
+    await expectRevert(
+      auction.write.createAuction(
+        [tokenId, mockUsdc.address, START, FLOOR, DUTCH_DUR, STEP, DROP_BPS, 0n],
+        { account: alice.account },
+      ),
+      "AlreadyAuctioned",
+    );
+  });
+
+  it("rejects createAuction while an expired English auction is still unsettled", async function () {
+    const d = await deploy();
+    const english = await d.viem.deployContract("DXEnglishAuction", [
+      d.registrar.address, d.owner.account.address, FEE_BPS,
+      500n, 600n, 1200n,
+      d.owner.account.address,
+    ]);
+    await english.write.setPayToken([d.mockUsdc.address, true], { account: d.owner.account });
+    await d.auction.write.setPeerAuction([english.address], { account: d.owner.account });
+
+    const tokenId = await registerName(d, d.alice, "expired-english-first");
+    await d.registrar.write.approve([english.address, tokenId], { account: d.alice.account });
+    // English auction now pulls an anti-grief bond → fund + approve it in payToken.
+    await d.mockUsdc.write.mint([d.alice.account.address, MINT], { account: d.alice.account });
+    await d.mockUsdc.write.approve([english.address, MINT], { account: d.alice.account });
+    await english.write.createAuction(
+      [tokenId, d.mockUsdc.address, USDC(100n), 24n * 60n * 60n],
+      { account: d.alice.account },
+    );
+
+    await d.testClient.increaseTime({ seconds: Number(24n * 60n * 60n + 10n) });
+    await d.testClient.mine({ blocks: 1 });
+    expect(await english.read.isOnAuction([tokenId])).to.equal(true);
 
     await d.registrar.write.approve([d.auction.address, tokenId], { account: d.alice.account });
     await expectRevert(
@@ -299,6 +356,7 @@ describe("DXDutchAuction — step declining-price auction", function () {
     // subname followed
     expect((await registry.read.owner([royNode])).toLowerCase())
       .to.equal(bob.account.address.toLowerCase());
+    await expectRevert(auction.read.currentPrice([tokenId]), "AlreadySettled");
   });
 
   it("buy reverts if the live price exceeds maxPrice (slippage guard)", async function () {
@@ -323,7 +381,7 @@ describe("DXDutchAuction — step declining-price auction", function () {
       .to.equal(bob.account.address.toLowerCase());
   });
 
-  it("treats expired auctions as inactive, blocks buy, and allows a new auction", async function () {
+  it("keeps expired auctions occupied until cancel while blocking buy", async function () {
     const d = await deploy();
     const { auction, registrar, mockUsdc, alice, bob, testClient } = d;
     const tokenId = await startRate(d, alice, "expiring-dutch");
@@ -332,13 +390,22 @@ describe("DXDutchAuction — step declining-price auction", function () {
     await testClient.increaseTime({ seconds: Number(DUTCH_DUR) + 1 });
     await testClient.mine({ blocks: 1 });
 
-    expect(await auction.read.isOnAuction([tokenId])).to.equal(false);
+    expect(await auction.read.isOnAuction([tokenId])).to.equal(true);
     await expectRevert(
       auction.write.buy([tokenId, FLOOR], { account: bob.account }),
       "AuctionEnded",
     );
 
     await registrar.write.approve([auction.address, tokenId], { account: alice.account });
+    await expectRevert(
+      auction.write.createAuction(
+        [tokenId, mockUsdc.address, START, FLOOR, DUTCH_DUR, STEP, DROP_BPS, 0n],
+        { account: alice.account },
+      ),
+      "AlreadyAuctioned",
+    );
+
+    await auction.write.cancelAuction([tokenId], { account: alice.account });
     await auction.write.createAuction(
       [tokenId, mockUsdc.address, START, FLOOR, DUTCH_DUR, STEP, DROP_BPS, 0n],
       { account: alice.account },
@@ -417,6 +484,7 @@ describe("DXDutchAuction — step declining-price auction", function () {
     const tokenId = await startRate(d, alice, "roy");
     await auction.write.cancelAuction([tokenId], { account: alice.account });
     expect(await auction.read.isOnAuction([tokenId])).to.equal(false);
+    await expectRevert(auction.read.currentPrice([tokenId]), "AlreadySettled");
   });
 
   it("non-seller cannot cancel", async function () {

@@ -350,6 +350,22 @@ describe("DXMarketplace — fixed-price P2P sales of .dex 2LD", function () {
     );
   });
 
+  it("buy succeeds when maxPrice exactly equals the listing price (boundary is strict >)", async function () {
+    const deployed = await deploy();
+    const { marketplace, registrar, mockUsdc, alice, bob } = deployed;
+    const tokenId = await listName(deployed, alice, "roy-eq");
+
+    await mockUsdc.write.mint([bob.account.address, MINT], { account: bob.account });
+    await mockUsdc.write.approve([marketplace.address, PRICE], { account: bob.account });
+
+    // maxPrice == price must settle: the guard reverts only on price > maxPrice,
+    // so an equal maxPrice is the accepted boundary (not off-by-one rejected).
+    await marketplace.write.buy([tokenId, PRICE], { account: bob.account });
+    expect((await registrar.read.ownerOf([tokenId])).toLowerCase()).to.equal(
+      bob.account.address.toLowerCase(),
+    );
+  });
+
   // ── Cancel / updatePrice ────────────────────────────────────────────────────
 
   it("cancel removes the listing and the mark", async function () {

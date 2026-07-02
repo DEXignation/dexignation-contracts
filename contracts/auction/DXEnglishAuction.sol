@@ -100,6 +100,33 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
   uint256 public extendWindow;
   uint256 public extendBy;
 
+  /// @notice Seller anti-grief bond, in bps of the reserve price. Because the NFT
+  ///         stays in the seller's wallet (non-custodial), a seller could revoke
+  ///         approval after bids arrive to force a no-transfer settlement — keeping
+  ///         the name, refunding the winner, and harvesting the top bid as a free
+  ///         price signal. Requiring a bond makes that non-delivery cost real: on
+  ///         a no-transfer settlement the bond is forfeited to the stiffed winner.
+  ///         판매자 anti-grief 보증금(reserve 대비 bps). NFT가 판매자 지갑에 남는
+  ///         비수탁 구조라, 입찰 후 판매자가 approve를 철회해 "이전 없는 정산"을
+  ///         유발(이름 보유·낙찰자 환불·최고가 시세 공짜 취득)할 수 있다. 보증금을
+  ///         요구해 불이행에 실질 비용을 부과한다 — 무산 정산 시 보증금은 손해 본
+  ///         낙찰자에게 몰수된다.
+  uint256 public depositBps = 1000; // 10%
+
+  /// @notice Hard cap on `depositBps` (50%). Bounds how large a bond the owner can
+  ///         require so listing never becomes prohibitively expensive.
+  ///         `depositBps` 하드캡(50%). 리스팅이 과도하게 비싸지지 않도록 상한.
+  uint256 public constant MAX_DEPOSIT_BPS = 5000;
+
+  /// @notice Absolute floor for the bond, in the pay-token's smallest unit
+  ///         (default 10 for a 6-decimal USDC/USDT = 10 USD). Guarantees a
+  ///         meaningful deterrent even for a tiny reserve. Owner-adjustable in
+  ///         case a pay-token with different decimals is ever whitelisted.
+  ///         보증금 절대 하한(payToken 최소단위, 기본 10 = 6-decimal USDC/USDT 기준
+  ///         10달러). 아주 작은 reserve에서도 억제력 보장. decimals가 다른 토큰
+  ///         화이트리스트 대비 owner가 조정 가능.
+  uint256 public minDeposit = 10 * 10 ** 6;
+
   /// @notice Optional fixed-price marketplace, queried for mutual exclusion.
   ///         상호 배타 강제용 고정가 마켓(선택).
   IDXMarketplaceCheck public marketplace;
@@ -119,6 +146,7 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
     uint256 endTime;
     address highestBidder;
     uint256 highestBid;
+    uint256 deposit;      // seller anti-grief bond, held in payToken
     uint8   extensionCount;
     bool    settled;
   }
@@ -140,6 +168,9 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
   event AuctionParamsSet(uint256 minIncrementBps, uint256 extendWindow, uint256 extendBy);
   event MaxExtensionsSet(uint8 maxExtensions);
   event AuctionDurationBoundsSet(uint256 minDuration, uint256 maxDuration);
+  event DepositBpsSet(uint256 bps);
+  event MinDepositSet(uint256 amount);
+  event DepositForfeited(uint256 indexed tokenId, address indexed winner, uint256 amount);
 
   event AuctionCreated(
     uint256 indexed tokenId, address indexed seller, address indexed payToken,
@@ -172,6 +203,7 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
   error HasBids(uint256 tokenId);
   error NothingToWithdraw();
   error FeeTooHigh(uint256 requested, uint256 max);
+  error DepositBpsTooHigh(uint256 requested, uint256 max);
   error BadDuration();
   error BadDurationBounds();
   error ZeroMinIncrement();
@@ -211,6 +243,13 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
     if (token == address(0)) revert ZeroAddress();
     allowedPayToken[token] = allowed; emit PayTokenSet(token, allowed);
   }
+  function setDepositBps(uint256 bps) external onlyOwner {
+    if (bps > MAX_DEPOSIT_BPS) revert DepositBpsTooHigh(bps, MAX_DEPOSIT_BPS);
+    depositBps = bps; emit DepositBpsSet(bps);
+  }
+  function setMinDeposit(uint256 amount) external onlyOwner {
+    minDeposit = amount; emit MinDepositSet(amount);
+  }
   function setMarketplace(address m) external onlyOwner {
     marketplace = IDXMarketplaceCheck(m); emit MarketplaceSet(m);
   }
@@ -246,10 +285,15 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
   // ── Create ──────────────────────────────────────────────────────────────
   /// @notice Open an auction for an owned, approved 2LD. The NFT stays in the
   ///         seller's wallet; only the approval is granted to this contract.
+  ///         The seller also posts an anti-grief bond (see `depositBps`), pulled
+  ///         in the auction's payToken — so the seller must ALSO approve this
+  ///         contract to spend that stablecoin amount before calling.
   ///         소유·승인된 2LD 경매 개시. NFT는 판매자 지갑에 그대로, approve만 부여.
+  ///         판매자는 anti-grief 보증금(`depositBps` 참조)도 payToken으로 예치하므로,
+  ///         호출 전 해당 스테이블코인 금액도 이 컨트랙트에 approve해야 한다.
   function createAuction(
     uint256 tokenId, address payToken, uint256 reservePrice, uint256 duration
-  ) external {
+  ) external nonReentrant {
     if (!allowedPayToken[payToken]) revert UnsupportedPayToken(payToken);
     if (reservePrice == 0) revert ZeroReserve();
     if (duration < minAuctionDuration || duration > maxAuctionDuration) revert BadDuration();
@@ -271,11 +315,26 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
       revert AuctionedElsewhere(tokenId);
     }
 
+    // Anti-grief bond = max(reserve * depositBps, minDeposit floor). Computed by
+    // the contract (not a caller param) so a seller can never under-post it.
+    //   anti-grief 보증금 = max(reserve*depositBps, minDeposit 하한). 컨트랙트가
+    //   계산(파라미터 아님)하므로 판매자가 적게 예치할 수 없다.
+    uint256 deposit = (reservePrice * depositBps) / 10000;
+    if (deposit < minDeposit) deposit = minDeposit;
+
+    // Effects before the external transfer (CEI): record the auction first.
+    //   외부 전송 전에 상태 기록(CEI): 경매를 먼저 등록한다.
     auctions[tokenId] = Auction({
       seller: msg.sender, tokenId: tokenId, payToken: payToken,
       reservePrice: reservePrice, endTime: block.timestamp + duration,
-      highestBidder: address(0), highestBid: 0, extensionCount: 0, settled: false
+      highestBidder: address(0), highestBid: 0, deposit: deposit,
+      extensionCount: 0, settled: false
     });
+
+    // Pull the seller's bond into the contract (held until settlement/cancel).
+    //   판매자 보증금을 컨트랙트로 회수(정산/취소 시까지 보관).
+    IERC20(payToken).safeTransferFrom(msg.sender, address(this), deposit);
+
     emit AuctionCreated(tokenId, msg.sender, payToken, reservePrice, block.timestamp + duration);
     _notifyMetadataUpdate(tokenId);
   }
@@ -361,9 +420,12 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
     a.settled = true; // effects first (CEI)
 
     if (a.highestBidder == address(0)) {
+      // No bids: seller kept the name and did no harm → return the bond.
+      //   입찰 0건: 판매자가 이름을 지켰고 해를 끼치지 않음 → 보증금 반환.
+      if (a.deposit > 0) IERC20(a.payToken).safeTransfer(a.seller, a.deposit);
       emit AuctionEndedNoBid(tokenId);
       _notifyMetadataUpdate(tokenId);
-      return; // name stays with the seller; nothing escrowed
+      return;
     }
 
     // Re-check ownership at settlement (seller may have moved/let it expire).
@@ -388,15 +450,11 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
       bool approved = registrar.getApproved(tokenId) == address(this) ||
                       registrar.isApprovedForAll(a.seller, address(this));
       if (currentOwner != a.seller || !approved) {
-        pendingReturns[a.payToken][a.highestBidder] += a.highestBid;
-        emit AuctionSettledNoTransfer(tokenId, a.highestBidder, a.highestBid);
-        _notifyMetadataUpdate(tokenId);
+        _endWithoutTransfer(a, tokenId);
         return;
       }
     } catch {
-      pendingReturns[a.payToken][a.highestBidder] += a.highestBid;
-      emit AuctionSettledNoTransfer(tokenId, a.highestBidder, a.highestBid);
-      _notifyMetadataUpdate(tokenId);
+      _endWithoutTransfer(a, tokenId);
       return;
     }
 
@@ -409,34 +467,53 @@ contract DXEnglishAuction is Ownable, ReentrancyGuard {
     if (fee > 0) pay.safeTransfer(feeRecipient, fee);
     registrar.safeTransferFrom(a.seller, a.highestBidder, tokenId); // ② NFT → winner
     // ③ DXRegistrar._update moves registry control + subname subtree to winner.
+    // ④ Seller delivered the name → return the anti-grief bond.
+    //    판매자가 이름을 정상 인도 → anti-grief 보증금 반환.
+    if (a.deposit > 0) pay.safeTransfer(a.seller, a.deposit);
 
     emit AuctionSettled(tokenId, a.highestBidder, a.highestBid, fee);
+  }
+
+  /// @dev Graceful no-transfer end: the seller failed to deliver (moved the NFT,
+  ///      revoked approval, or let it expire/burn). Refund the winner's bid AND
+  ///      forfeit the seller's bond to the winner, both via the pull ledger. The
+  ///      name simply stays with the seller — but the free-cancel is now paid for.
+  ///      이전 없는 정상 종료: 판매자 불이행(NFT 이동/approve 철회/만료·burn).
+  ///      낙찰자 입찰금 환불 + 판매자 보증금을 낙찰자에게 몰수(둘 다 Pull 장부).
+  ///      이름은 판매자에게 남지만, 공짜 취소가 유료가 된다.
+  function _endWithoutTransfer(Auction storage a, uint256 tokenId) private {
+    pendingReturns[a.payToken][a.highestBidder] += a.highestBid + a.deposit;
+    emit AuctionSettledNoTransfer(tokenId, a.highestBidder, a.highestBid);
+    if (a.deposit > 0) emit DepositForfeited(tokenId, a.highestBidder, a.deposit);
+    _notifyMetadataUpdate(tokenId);
   }
 
   // ── Cancel (only before any bid) ──────────────────────────────────────────
   /// @notice Cancel an auction that has received no bids. Once a bid exists the
   ///         auction cannot be cancelled (bidder protection).
   ///         입찰이 없는 경매만 취소. 입찰 발생 후엔 취소 불가(입찰자 보호).
-  function cancelAuction(uint256 tokenId) external {
+  function cancelAuction(uint256 tokenId) external nonReentrant {
     Auction storage a = auctions[tokenId];
     if (a.seller == address(0) || a.settled) revert AuctionNotFound(tokenId);
     if (a.seller != msg.sender) revert NotSeller(tokenId, msg.sender);
     if (a.highestBidder != address(0)) revert HasBids(tokenId);
-    a.settled = true;
+    a.settled = true; // effects first (CEI)
+    // No bids ever placed → return the seller's bond.
+    //   입찰이 없었음 → 판매자 보증금 반환.
+    if (a.deposit > 0) IERC20(a.payToken).safeTransfer(a.seller, a.deposit);
     emit AuctionCancelled(tokenId);
     _notifyMetadataUpdate(tokenId);
   }
 
   // ── Views ─────────────────────────────────────────────────────────────────
-  /// @notice True if a live (created, not settled, not past end) auction exists.
+  /// @notice True if a created, not-settled auction still occupies the token.
   ///         Used by DXRegistrar.tokenURI to render the AUCTION mark, and by the
   ///         marketplace for mutual exclusion.
-  ///         진행 중(생성됨·미정산·마감 전) 경매가 있으면 true. tokenURI의 AUCTION
+  ///         생성됨·미정산 경매가 있으면 true. tokenURI의 AUCTION
   ///         마크 표시와 마켓의 상호 배타 검사에 사용.
   function isOnAuction(uint256 tokenId) external view returns (bool) {
     Auction memory a = auctions[tokenId];
     if (a.seller == address(0) || a.settled) return false;
-    if (block.timestamp >= a.endTime) return false;
     try registrar.ownerOf(tokenId) returns (address o) {
       return o == a.seller;
     } catch { return false; }

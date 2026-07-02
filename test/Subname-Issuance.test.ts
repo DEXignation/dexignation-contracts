@@ -164,6 +164,34 @@ describe("DXRegistry — direct subname issuance", function () {
     expect(await d.resolver.read.text([subnode, "description"])).to.equal("");
   });
 
+  it("setSubnodeOwner reassigns a subname and invalidates old resolver records", async function () {
+    const d = await deploy();
+    const parentNode = await registerParent(d, d.alice, "aliceownerbump");
+
+    await d.registry.write.issueSubnodeRecord(
+      [parentNode, "team", d.bob.account.address, d.resolver.address],
+      { account: d.alice.account },
+    );
+
+    const subnode = subnodeFor(parentNode, "team");
+    await d.resolver.write.setText([subnode, "description", "owned by bob"], {
+      account: d.bob.account,
+    });
+    const v0 = await d.resolver.read.recordVersions([subnode]);
+    expect(await d.resolver.read.text([subnode, "description"]))
+      .to.equal("owned by bob");
+
+    await d.registry.write.setSubnodeOwner(
+      [parentNode, labelHash("team"), d.carol.account.address],
+      { account: d.alice.account },
+    );
+
+    expect((await d.registry.read.owner([subnode])).toLowerCase())
+      .to.equal(d.carol.account.address.toLowerCase());
+    expect(await d.resolver.read.recordVersions([subnode])).to.equal(v0 + 1n);
+    expect(await d.resolver.read.text([subnode, "description"])).to.equal("");
+  });
+
   it("inherits parent expiry", async function () {
     const d = await deploy();
     const parentNode = await registerParent(d, d.alice, "aliceexpire");
@@ -204,5 +232,24 @@ describe("DXRegistry — direct subname issuance", function () {
       }),
       "ZeroAddress",
     );
+  });
+
+  it("rejects zero address sale module even when disabling, and accepts a real one", async function () {
+    const d = await deploy();
+
+    // The guard is unconditional — it fires regardless of the `allowed` flag,
+    // so a zero address cannot be passed even to un-authorise.
+    await expectRevert(
+      d.registry.write.setSaleModule([ZERO_ADDR, false], {
+        account: d.owner.account,
+      }),
+      "ZeroAddress",
+    );
+
+    // A non-zero module still authorises normally.
+    await d.registry.write.setSaleModule([d.alice.account.address, true], {
+      account: d.owner.account,
+    });
+    expect(await d.registry.read.saleModule([d.alice.account.address])).to.equal(true);
   });
 });

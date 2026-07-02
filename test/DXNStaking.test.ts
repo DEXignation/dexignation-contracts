@@ -175,4 +175,23 @@ describe("DXNStaking", function () {
     expect(await rewardToken.read.balanceOf([alice.account.address])).to.equal(3n);
     expect(await staking.read.pendingNotify([rewardToken.address])).to.equal(0n);
   });
+
+  it("notifyReward with amount zero is a no-op and leaves the balance unaccounted", async function () {
+    const deployed = await deploy();
+    const { alice, owner, staking, rewardToken } = deployed;
+
+    await staking.write.setMinTotalStakeForRewards([1n], { account: owner.account });
+    await stakeFor(deployed, 3n);
+
+    // Fund the contract, then notify with amount=0. The early `if (amount == 0) return;`
+    // must skip distribution entirely — nothing credited, nothing accounted.
+    await rewardToken.write.mint([staking.address, 5n]);
+    await staking.write.notifyReward([rewardToken.address, 0n], { account: owner.account });
+
+    expect(
+      await staking.read.pendingReward([alice.account.address, rewardToken.address]),
+    ).to.equal(0n);
+    // The full 5 stays unaccounted, ready to be swept by a later real notify.
+    expect(await staking.read.pendingNotify([rewardToken.address])).to.equal(5n);
+  });
 });

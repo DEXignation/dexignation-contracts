@@ -532,8 +532,8 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
 
   /// @notice Transfer hook (v2). On a real ownership transfer (not mint/burn),
   ///         atomically (1) move registry control to the new holder and
-  ///         (2) invalidate the node's resolver records so they no longer
-  ///         point at the previous owner. Prevents funds being sent to the
+  ///         (2) invalidate stale resolver records through the registry owner
+  ///         change. Prevents funds being sent to the
   ///         former owner after a name changes hands. Mint (from==0) and burn
   ///         (to==0) are skipped — registration sets control/records itself,
   ///         and burn intentionally leaves history.
@@ -560,19 +560,11 @@ contract DXRegistrar is ERC721, ERC2981, IDXRegistrar, Ownable {
     //   무효화하면 방금 설정한 주소 레코드가 지워진다. 유저 간 2차 전송만
     //   무효화한다.
     if (from != address(0) && to != address(0) && !controllers[from]) {
-      bytes32 node = keccak256(abi.encodePacked(baseNode, bytes32(tokenId)));
-
-      // (1) Move registry control to the new token holder.
-      //     registry 제어권을 새 보유자로 이전.
+      // Move registry control to the new token holder. The registry invalidates
+      // stale resolver records once it sees an existing subnode owner change.
+      //   registry 제어권을 새 보유자로 이전. 기존 서브노드 owner가 바뀌면
+      //   registry가 stale resolver record를 무효화한다.
       registry.setSubnodeOwner(baseNode, bytes32(tokenId), to);
-
-      // (2) Invalidate stale resolver records (addr/text/contenthash/
-      //     profile/abi/agent) in O(1) via version bump. Old records remain
-      //     on chain under the previous version for history.
-      //     리졸버 레코드를 버전 증가로 일괄 무효화. 옛 레코드는 이력으로 보존.
-      if (address(recordResolver) != address(0)) {
-        recordResolver.bumpVersion(node);
-      }
       emit MetadataUpdate(tokenId);
     }
     return from;
